@@ -1,0 +1,217 @@
+"""Shared pytest fixtures for the gflow-cli test suite.
+
+The ``install_log_capture`` fixture replaces 4+ inline copies of
+``structlog.configure(processors=[merge_contextvars, cap])`` scattered across
+test files. Centralizing prevents the most likely regression: a new test that
+needs to assert on a contextvar-bound field (e.g. ``correlation_id``) and
+silently omits ``merge_contextvars`` from its processor chain, yielding
+mysteriously-missing fields in the captured event dict.
+
+``_isolate_settings`` is an autouse fixture that prevents the cached
+``get_settings()`` singleton from ever resolving to the developer's real
+``platformdirs`` paths during test runs. It writes ``GFLOW_CLI_HOME`` and
+``GFLOW_CLI_DB_PATH`` to per-test tmp dirs, then clears the ``lru_cache``
+before and after every test. Without this, any test that calls
+``get_settings()`` without first patching the env will open — and write into
+— the developer's production catalog (issue #86).
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+import structlog
+
+# Shared doctor fixture (#542) — defined next to its CHECK_IDS constant in
+# tests/fixtures/doctor_env.py; re-exported here so pytest registers it for
+# both tests/services/test_doctor.py and tests/cli/test_cli_doctor.py.
+from tests.fixtures.doctor_env import healthy_doctor_env  # noqa: F401
+
+
+def _assert_source_under_test_is_this_tree() -> None:
+    """Fail loudly if ``gflow_cli`` resolves outside the tree these tests live in (#760).
+
+    A git worktree has no ``.venv`` of its own: the venv's editable install pins ``src/``
+    in the PRIMARY checkout. So ``pytest`` run inside a worktree executes the worktree's
+    TESTS against the main checkout's SOURCE — and it fails *open*. A release branch runs
+    its own gates, sees green, and has validated code it is not shipping; a regression on
+    that branch passes, because the other tree's healthy code answered for it.
+
+    Caught during the v0.71.1 release only because one new assertion happened to differ
+    between the two trees. Nothing structural would have caught it, which is why this is a
+    hard error rather than a warning.
+
+    Deliberately narrow: it fires only when a local ``src/gflow_cli`` exists beside these
+    tests AND the import came from somewhere else. Testing an installed wheel — where no
+    local source tree is present — is untouched.
+    """
+    import gflow_cli
+
+    tests_root = Path(__file__).resolve().parent.parent
+    local_src = tests_root / "src" / "gflow_cli"
+    if not local_src.is_dir():
+        return  # no source tree beside the tests: an installed-package run, leave it alone
+    imported = Path(gflow_cli.__file__).resolve().parent
+    if imported == local_src.resolve():
+        return
+    raise pytest.UsageError(
+        f"gflow_cli was imported from {imported}, but these tests live in {tests_root} "
+        f"(which ships {local_src}). The tests would validate the WRONG source tree and "
+        f"pass regardless — see #760. If you are in a git worktree, prefix the run with "
+        f'PYTHONPATH="{tests_root / "src"}".'
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Stop git from escaping pytest's basetemp into the real clone (#605).
+
+    ``addopts`` pins ``--basetemp=tmp/pytest`` *inside* the working tree (so msys2's
+    ``TMPDIR=$PWD`` cannot scatter ``pytest-of-*/`` dirs around). The cost is that
+    every ``tmp_path`` is a directory nested in a git repository: a test that shells
+    out to git in a tmp dir without a ``.git`` has its command resolved against the
+    enclosing gflow-cli clone. That is how a full offline run checked out ``develop``
+    over the developer's own branch. ``GIT_CEILING_DIRECTORIES`` stops git's upward
+    search above the basetemp, turning the escape into a plain "not a git repository".
+
+    The ceiling is the basetemp's *parent*, not the basetemp: git stops when it
+    reaches a ceiling directory but still searches the one it started in, so
+    pinning the basetemp itself would leave a test whose cwd IS the basetemp
+    (``tmp_path_factory.getbasetemp()``) free to walk out. Any ceiling the
+    developer already set is preserved after ours.
+    """
+    _assert_source_under_test_is_this_tree()
+    basetemp = config.getoption("basetemp", None)
+    if basetemp:
+        ceilings = [str(Path(basetemp).resolve().parent), os.environ.get("GIT_CEILING_DIRECTORIES")]
+        os.environ["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(c for c in ceilings if c)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_structlog_config() -> Iterator[None]:
+    """Give every test the structlog configuration it started with.
+
+    ``structlog.configure()`` mutates process-global state. ``install_log_capture``
+    (and the inline copies it replaced) called it and never put it back, so the
+    FIRST test to capture logs silently switched the whole rest of the session
+    from "render to stdout" to "collect into a list". Any later test asserting on
+    rendered log output then passed or failed purely on collection order — the
+    code under test behaving identically either way.
+
+    Same contract as :func:`_isolate_settings`: snapshot before, restore after, so
+    no test can inherit or leak logging configuration. A test that needs a
+    specific configuration must establish it itself.
+    """
+    saved = structlog.get_config().copy()
+    yield
+    structlog.configure(**saved)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Redirect GFLOW_CLI_HOME and GFLOW_CLI_DB_PATH to per-test tmp dirs.
+
+    Clears the ``get_settings()`` lru_cache before the test so the first call
+    inside the test (or in any fixture that runs after this one) reads the
+    patched env vars, not a stale cached value from a previous test. Cache is
+    cleared again at teardown so it does not bleed into the next test.
+
+    Tests that need a specific DB (e.g. ``seeded_db`` in ``test_cli_data.py``)
+    can override ``GFLOW_CLI_DB_PATH`` with another ``monkeypatch.setenv`` call
+    after this fixture runs — the cache is already cleared so the next
+    ``get_settings()`` will pick up the overridden value.
+
+    **Tests that assert default-resolution behavior** (i.e. the "no explicit
+    path" code path that lets ``platformdirs`` pick the location) must first
+    undo the autouse env with ``monkeypatch.delenv("GFLOW_CLI_DB_PATH",
+    raising=False)`` (see ``test_settings_resolves_default_db_path``). Tests in
+    ``tests/test_config.py::TestDefaults`` use the ``clean_env`` fixture which
+    strips all ``GFLOW_CLI_*`` vars and already covers this case.
+    """
+    from gflow_cli.config import reset_settings
+
+    monkeypatch.setenv("GFLOW_CLI_HOME", str(tmp_path / "gflow_home"))
+    monkeypatch.setenv("GFLOW_CLI_DB_PATH", str(tmp_path / "test_gflow.db"))
+    # #479: the per-test empty home means the update-check cache is always
+    # stale — without this, any CliRunner test on a non-editable install
+    # without CI set would spawn a real PyPI request. tests/test_update_check.py
+    # re-enables it explicitly.
+    monkeypatch.setenv("GFLOW_CLI_UPDATE_CHECK", "0")
+    # #1164: usage counters stay off in tests; tests/test_telemetry.py unsets this.
+    monkeypatch.setenv("GFLOW_CLI_TELEMETRY", "0")
+    # #864: the MCP entry points write a lease-wait default straight into os.environ
+    # (production wants it process-wide). Recording the variable here makes teardown
+    # remove it, so a test that runs `run_http` unpatched cannot turn every later
+    # lease-contention test into a 180 s wait.
+    monkeypatch.setenv("GFLOW_CLI_LEASE_WAIT_SECONDS", "0")
+    monkeypatch.delenv("GFLOW_CLI_LEASE_WAIT_SECONDS")
+    reset_settings()
+    yield
+    reset_settings()
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point every proxy at a closed local port so no unit test, or child it spawns, goes online.
+
+    #1164: a unit test's child process once ran the production uploader and POSTed a fixture report
+    to the live telemetry endpoint. ``urllib`` and ``httpx`` read these variables and children
+    inherit them; loopback stays direct. e2e/live tests talk to real services and are exempt, as is
+    a test marked ``needs_network``. The guard is function-scoped, so a module- or session-scoped
+    fixture runs before it: a module whose fixture builds or installs is marked as a whole.
+    """
+    if any(request.node.get_closest_marker(m) for m in ("e2e", "live", "smoke", "needs_network")):
+        return
+    dead = "http://127.0.0.1:9"  # discard port: nothing listens, connections are refused at once
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(var, dead)
+    for var in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(var, "127.0.0.1,localhost,::1")
+    # urllib ignores HTTP_PROXY when REQUEST_METHOD is set (the httpoxy guard)
+    monkeypatch.delenv("REQUEST_METHOD", raising=False)
+    # #1229: the credits read tries the profile's cookie jar and flow.google.com first. Off
+    # here, so a credits test reaches the page fake it installs; the wire tests turn it on.
+    monkeypatch.setenv("GFLOW_CLI_WIRE_READS", "0")
+
+
+@pytest.fixture
+def install_log_capture() -> Iterator[structlog.testing.LogCapture]:
+    """Install a fresh structlog ``LogCapture`` processor + ``merge_contextvars``.
+
+    Use as a fixture argument::
+
+        def test_event_shape(install_log_capture: structlog.testing.LogCapture) -> None:
+            log = structlog.get_logger("test")
+            log.info("hello", extra="value")
+            assert install_log_capture.entries[0]["event"] == "hello"
+
+    structlog 25.x's ``LogCapture()`` takes no constructor args; captured
+    events accumulate on ``.entries``. ``merge_contextvars`` must run BEFORE
+    ``LogCapture`` so contextvar-bound fields (``correlation_id``,
+    ``cli_version``) land in the captured event dict — without it, any test
+    that asserts on those fields silently fails with a confusing "key missing".
+    """
+    cap = structlog.testing.LogCapture()
+    structlog.configure(
+        processors=[structlog.contextvars.merge_contextvars, cap],
+        cache_logger_on_first_use=False,
+    )
+    yield cap
+    # Explicit teardown even though _isolate_structlog_config already restores
+    # the snapshot: a fixture that mutates global state should undo it at its own
+    # boundary, not rely on a sibling fixture's ordering.
+    structlog.reset_defaults()
+
+
+@pytest.fixture
+def fresh_wire(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Empty per-process state for the direct credits read (#1229), and no proxy: the
+    offline suite points HTTPS_PROXY at a dead port, which the wire would refuse to use."""
+    from gflow_cli.api import flow_wire
+
+    flow_wire.reset_state()
+    monkeypatch.setattr(flow_wire, "getproxies", dict)
+    yield
+    flow_wire.reset_state()

@@ -1,0 +1,19 @@
+{
+  "name": "gflow-mcpjam-bridge",
+  "private": true,
+  "type": "module",
+  "description": "Local-only MCP tool-selection eval for gflow-cli: MCPJam MCPClientManager snapshots the real tools, a stub server records calls, Claude Code (claude -p) is the host. Never uses EvalTest/EvalSuite or MCPJam Cloud.",
+  "scripts": {
+    "eval": "node run.mjs"
+  },
+  "engines": {
+    "node": ">=22.22"
+  },
+  "dependencies": {
+    "@mcpjam/sdk": "10.2.0",
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "overrides": {
+    "re2js": "2.8.7"
+  }
+}

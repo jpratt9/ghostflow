@@ -1,0 +1,52 @@
+# Pre-commit hooks for gflow-cli
+# Install (commit-time hooks): pip install pre-commit && pre-commit install
+# Install (pre-push hook too):  pre-commit install --hook-type pre-push
+# Run manually: pre-commit run --all-files
+#
+# Gates enforced on commit:
+#   1. ruff lint + format (fast, catches import order / style / unused imports)
+#   2. repo-hygiene (blocks tracked images, CDP lock files, hardcoded Windows paths)
+#   2b. size-gate (file/class length + ruff complexity ratchet, #1249)
+#
+# The hygiene hook is the primary defence against accidental leakage of:
+#   - generated output artefacts (*.jpg, *.jpeg, test_assets/smoke_*/, test_assets/debug_*/)
+#   - CDP lock files (.gflow-cdp.lock) that contain browser session metadata
+#   - hardcoded machine-specific paths in scripts/ (C:\Users\<name>\...)
+
+default_stages: [pre-commit]
+
+repos:
+  # Keep this rev in lockstep with the `ruff==` pin in pyproject.toml. A hook that
+  # formats with an older ruff than CI checks with will fight CI on every commit.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: repo-hygiene
+        name: Repo hygiene (no artefacts, no hardcoded paths)
+        language: python
+        entry: python scripts/ci/check_repo_hygiene.py
+        pass_filenames: false
+        always_run: true
+        additional_dependencies: []
+
+      - id: size-gate
+        name: Size gate (file/class length, ruff C901/PLR0915/PLR0904; ratchet baseline)
+        # system, not python: the gate runs ruff, which an isolated hook venv does not have
+        language: system
+        entry: uv run --no-sync python scripts/ci/check_size.py
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: Detect secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: '\.secrets\.baseline$'

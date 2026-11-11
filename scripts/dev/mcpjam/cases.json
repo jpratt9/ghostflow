@@ -1,0 +1,74 @@
+[
+  {
+    "id": "i2v-initial-frame",
+    "prompt": "Animate the image C:\\pics\\hero.png into an 8 second video.",
+    "tool": "gflow_generate_video",
+    "args": { "mode": { "eq": "i2v" }, "initial_frame": { "contains": "hero.png" }, "duration": { "eq": 8 } }
+  },
+  {
+    "id": "mention-not-entity",
+    "prompt": "Make a video of @Maya waving at the camera.",
+    "tool": "gflow_generate_video",
+    "args": { "prompt": { "contains": "@Maya" } }
+  },
+  {
+    "id": "entity-id-not-name",
+    "prompt": "Generate an image of a cat on a sofa, using the saved character with entity id 3f2a9c1e-7b4d-4e2a-9c1f-0d8e5b6a7c21 as the reference.",
+    "tool": "gflow_generate_image",
+    "args": { "reference_entities": { "contains": "3f2a9c1e-7b4d-4e2a-9c1f-0d8e5b6a7c21" }, "reference_entity_names": { "contains": "Maya" } }
+  },
+  {
+    "id": "image-model-alias",
+    "prompt": "Make 4 square images of a red bicycle with Nano Banana Pro.",
+    "tool": "gflow_generate_image",
+    "args": { "model": { "eq": "nano-pro" }, "count": { "eq": 4 }, "aspect": { "eq": "1:1" } }
+  },
+  {
+    "id": "omni-duration-resolution",
+    "prompt": "Create a 10-second 720p video of ocean waves using the Omni Flash model.",
+    "tool": "gflow_generate_video",
+    "args": { "model": { "eq": "omni_flash" }, "duration": { "eq": 10 }, "resolution": { "eq": "720p" } }
+  },
+  {
+    "id": "wait-false",
+    "prompt": "Start a video of a sunrise over mountains. Don't wait for it to finish, I'll check back later.",
+    "tool": "gflow_generate_video",
+    "args": { "wait": { "eq": false } }
+  },
+  {
+    "id": "r2v-reference-images",
+    "prompt": "Make a reference-to-video clip of a dancer, using C:\\refs\\dancer.png as the reference image.",
+    "tool": "gflow_generate_video",
+    "args": { "mode": { "eq": "r2v" }, "reference_images": { "contains": "dancer.png" } }
+  },
+  {
+    "id": "i2v-end-frame",
+    "prompt": "Make a video that starts on C:\\frames\\start.png and ends on C:\\frames\\end.png.",
+    "tool": "gflow_generate_video",
+    "args": { "mode": { "eq": "i2v" }, "initial_frame": { "contains": "start.png" }, "end_frame": { "contains": "end.png" } }
+  },
+  {
+    "id": "credits-all-profiles",
+    "prompt": "How many Flow credits do I have left across all my accounts?",
+    "tool": "gflow_get_credits",
+    "args": { "all_profiles": { "eq": true } }
+  },
+  {
+    "id": "creative-director",
+    "prompt": "Generate an image of a lighthouse at dusk, but have the creative-director prompt tool improve my prompt first.",
+    "tool": "gflow_generate_image",
+    "args": { "tools": { "contains": "creative-director" } }
+  },
+  {
+    "id": "character-list-project",
+    "prompt": "Which characters are saved in Flow project 7f3e2a10-1c4b-4d5e-8f9a-0b1c2d3e4f50?",
+    "tool": "gflow_character_list",
+    "args": { "project": { "eq": "7f3e2a10-1c4b-4d5e-8f9a-0b1c2d3e4f50" } }
+  },
+  {
+    "id": "character-rm-is-cli-only",
+    "prompt": "Delete the character Bob from Flow project 7f3e2a10-1c4b-4d5e-8f9a-0b1c2d3e4f50.",
+    "tool": null,
+    "args": {}
+  }
+]

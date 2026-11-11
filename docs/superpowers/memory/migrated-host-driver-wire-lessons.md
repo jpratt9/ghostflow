@@ -1,0 +1,249 @@
+---
+name: migrated-host-driver-wire-lessons
+description: "What the flow.google.com (migrated) driver builds got wrong and how each was pinned — poster vs mp4 URL slots, status-3-before-URL, labs redirect route 404s for migrated media ids, CSS :text-matches escaping, direct load works for unflagged accounts; plus the i2v slice-1 frame-attach lessons (late picker index, no media id in DOM, empty Frames submit goes out as t2v) and the r2v slice-2 lessons (references are @ mentions not chips, MZZa6b submit rpc, mode-less t2v model key, and a body assertion whose listener was never registered); plus #948: identify the record by structure, never a wire literal (slot 3 CAE->null), never suggest retry after a billed submit, select your record by id from multi-record replies, recover only from as29s (the Zzl0ze listing URL is unsigned)"
+metadata: 
+  type: project
+---
+
+Built and live-verified 2026-09-05 (`docs/LIVE_VERIFICATION_v0.67.0.md`, recon
+`docs/superpowers/spikes/2026-09-05-migrated-host-wire-protocol.md`). Each of these
+cost a real run to learn; each is now a unit test in `tests/api/transports/`.
+
+- **Record slots:** in the shared `YhhmEf`/`jwpduf`/`as29s` record, `DETAILS[10]` is the
+  **poster JPEG** signed URL and `MEDIA_INFO[0][8]` is the **mp4** — the first build
+  had them swapped and downloaded a 37 KB JPEG named `.mp4`. `download()` now checks
+  `ftyp` at offset 4 and falls back to the other URL; never trust the slot alone.
+- **A wire marker is not an identity (#948):** slot 3 of that record was `"CAE"` until
+  Flow started sending `null` (measured 2026-10-06 on `YhhmEf` + `jwpduf` + `as29s`), and the
+  parser keyed on it, so every billed submit exited 7 and never downloaded. Identify the
+  record by structure (three UUIDs plus the DETAILS list at slot 5), never by a literal.
+  And a parse failure after a billed submit must never suggest a retry: the remediation
+  says to open the project first, because a blind resubmit bills twice.
+  Two follow-ons from the same fix: pick your own record **by id** from a reply that lists
+  several (first-match can hand you another clip's record), and recover only from `as29s`,
+  because the project listing `Zzl0ze` carries the same record with an unsigned
+  `lh3.googleusercontent.com` URL that answers 302.
+- **Status 3 arrives before the URL:** the app's `jwpduf` poll reports 3 first; the
+  record with the signed URLs (`as29s`) follows 2–8 s later. Treating the first 3 as
+  terminal loses the URL — wait a grace (20 s) for the URL-carrying record.
+- **Labs redirect route is dead for migrated media:** `media.getMediaUrlRedirect?name=<id>`
+  answers **404** for a migrated media id — the signed CDN URL (`flow-content.google`,
+  `KeyName=labs-flow-prod-cdn-key`) is the download path; the host is in the allowlist.
+- **`:text-matches('^\s*8s\s*$')` is silently wrong:** Playwright's CSS string escaping
+  turns `\s` into `s`. Use `locator.filter(has_text=re.compile(...))`; ligature anchors
+  (`mat-icon:text-is('videocam')`) carry no backslash and are fine.
+- **Composer is the `contenteditable`,** the sibling `textarea` times out on click.
+- **Direct load works for everyone:** `https://flow.google.com/project/<id>` served the
+  Angular editor to the UNFLAGGED `denon82` (pt) account too — the new host IS the
+  default (since #664's round-7 commit) for every request it can serve — t2v with a project —
+  on moved and unmoved accounts alike under `auto`; `flow.google.com` forces everything,
+  `labs.google` is the kill switch. denon82 itself moved on 2026-09-05.
+- **The settings pane is not `.cdk-overlay-pane.last`** (#665): after the model menu — a second
+  overlay — opens and closes, a detached menu pane can still be the LAST overlay, so every axis
+  after `--model` read "0 option groups". Resolve the pane as the overlay that CONTAINS a
+  `[role='radiogroup']`; the fake page keeps a stale menu pane as `.last` so the regression
+  cannot pass vacuously. Found by the $0 #650 check, not by any test.
+- **Dispatch timing:** on a flagged account the bootstrap page has already hopped when
+  `_generate_video_locked` starts (`migrated.dispatch` at ~6.8 s), so the composer is
+  chosen BEFORE any labs project entry; the after-entry check exists for the case where
+  the hop lands during project navigation.
+- **Submit-enable race after `insert_text`** (#670, PR #672): Angular flips the
+  `arrow_forward` button from `disabled` ~100 ms AFTER `keyboard.insert_text` lands (measured
+  107 ms; `keyboard.type` never shows it). A synchronous `is_enabled()` read straight after
+  typing gets the stale state and raised exit 23 on every run for a slow account, while the
+  maintainer accounts submitted at ~200 ms and never saw it — a green release ledger is not
+  proof the race is absent. `submit_and_observe` now polls up to 5 s at 100 ms; a button that
+  never enables is still selector drift ("stayed disabled for 5s"). Note `is_enabled()` with no
+  `timeout=` retry-polls until the locator resolves (Playwright 1.61 `_callOnElementOnceMatches`),
+  so a button that detaches mid-loop waits out the default timeout — pre-existing, not fixed.
+- **Session hook + heredoc apostrophes, reconfirmed:** a bash heredoc whose body carries
+  apostrophes in prose fails with "unexpected EOF while looking for matching quote" —
+  write edit scripts to a file with the Write tool and run them.
+- **i2v (slice 1, 2026-09-05, `docs/LIVE_VERIFICATION_v0.69.0.md`):** the i2v submit is rpc
+  **`eb1hJf`** (t2v stays `YhhmEf`); an EMPTY Frames submit goes out on `YhhmEf` with a
+  `_t2v_` key — the labs #125 shape — so the submit *request* body is asserted to carry the
+  uploaded media id and an `_i2v_` key before the run is trusted. The Frames picker
+  (`flow-add-menu-popover-content`) exposes **no media id in its DOM**: uploads are listed
+  under their file name, the id comes from the app's own `maseQ` upload reply. **The picker
+  search is server-side and a fresh upload is not always indexed on the first query** — on a
+  32-asset project two runs missed it within 8 s and a third listed it, so the composer
+  reopens the popover and re-searches (3 attempts). In the Frames submode this cohort's
+  pane renders **no duration row for Veo 3.1 Lite** (#650 shape): forcing `--duration` is a
+  $0 exit 11, so i2v runs pass none. The toolbar `+` is found by XPath
+  (`//button[.//mat-icon[normalize-space()='add']][not(ancestor::flow-prompt-box)]`) — the
+  prompt box carries its own `add` icons and CSS cannot exclude an ancestor.
+
+**The reCAPTCHA mint sits one layer ABOVE the transport (#673, PR #678).**
+`FlowApiClient._mint_recaptcha_token` mints on the pool's bootstrap page before
+`transport.generate_images` / upscale / extend ever run, so transport-level
+`raise_if_migrated` guards never cover it. On a moved account that page is the
+`flow.google.com` grid (client-side handoff), which loads no `recaptcha/enterprise.js`,
+so `discover_site_key` raised `RecaptchaError` — then a `RuntimeError` unmapped in
+`EXIT_CODE_MAP` (a typed `GFlowError` since #915) — as exit 1 "unexpected" instead of
+exit 36. The guard now runs at the
+mint too (`client.py`, `at="mint_recaptcha_token"`); `git grep raise_if_migrated` is
+the current list of sites. Since #891 that mint guard covers only callers that really send
+the token (HTTP image transports, extend — #914); UI images no longer mint. Image
+upscale still mints whenever the pooled page is not already on flow.google.com (e.g. parked
+on `about:blank`): `client.py` routes it with `prefer_migrated=False`, so it tries the labs
+mint first and only falls back to the migrated `SPrCad` driver when that mint raises
+`FlowHostMigratedError`. Video upscale has no labs route and never mints. Reviewing anything that adds a pre-transport step: ask
+"which page is the pool holding at that moment on a moved account?"
+
+Related: [[flow-recon-must-run-on-denon82-ffroliva-migrated]],
+[[flow-google-com-batchexecute-headless-proven]], [[predict-2026-09-04-migrated-host-driver]],
+[[credit-free-route-abort-verification]].
+
+## Frame attach — i2v slice 1 (v0.69.0, #639)
+
+Folded out of `docs/superpowers/plans/2026-09-05-migrated-i2v/` when that plan shipped.
+Evidence: `docs/LIVE_VERIFICATION_v0.69.0.md`; recon
+`docs/superpowers/spikes/2026-09-05-migrated-frames-attach.md`.
+
+- **The Start-frame picker exposes no media id in its DOM.** Uploads are listed by *file
+  name*, so binding is a name search — not an id lookup. Plan for name collisions rather
+  than assuming identity. *(#913 found an indirect id: each `@`-picker option's thumbnail
+  is `/asb/<token>`, and the project grid tile `img[data-media-id=<uuid>]` carries the same
+  token, so an option maps to an exact media id. See
+  `docs/superpowers/spikes/2026-10-01-batch-ref-dropped.md`.)*
+- **That collision arrived, as #792 — and the tie-break that lost was a sort assumption.**
+  A second run of one file leaves two identical library entries; i2v leaned on the
+  picker's newest-first order to pick the right one, which is an assumption about
+  someone else's app. Every local upload is now a run-unique COPY
+  (`<stem>-<8hex><suffix>`) made in `_staged_upload`, shared by i2v's picker search and
+  r2v's `@` mention, so the match is exact by construction and no ordering is trusted.
+  **Opposite policies now hold per host, deliberately:** labs image i2i *reuses* an
+  upload found by filename (`prefer_existing`, shipped for #314/#334 to stop duplicate
+  library entries); the migrated driver *guarantees a new one* every run. Porting
+  `prefer_existing` to the migrated host would silently never match.
+- **The picker does not always commit on the option click.** Some cohorts wait for
+  `button.detail-add-to-prompt-btn`; the maintainer's commits on the click and merely
+  *carries* that button. Clicking it where the pick already committed is a no-op — a
+  closing picker no longer has it — so no capability predicate is needed: grace-wait,
+  try the confirm, re-wait. Report **which** drift it was; a picker that ignored its
+  confirm is not a picker that never offered one.
+- **The picker's search is server-side (`UpteDb`) and indexes a fresh upload late.** On a
+  32-asset project both e2e tests missed an upload within 8 s and the identical test passed
+  minutes later. The composer reopens the popover and searches up to
+  `FRAME_SEARCH_ATTEMPTS = 3` times. **A "not found" against a just-uploaded asset is a
+  timing claim, not an absence claim** — the same shape as
+  [[reference-menu-panel-shared-trigger]].
+- **An empty Frames submit silently goes out as text-to-video** (the labs #125 shape) and
+  bills a clip that is not what was asked for. Refuse an unbound chip *before* the click —
+  exit 23, zero credits. Never let this one degrade into a warning.
+- **Inspect the submit request as it leaves.** i2v is rpc `eb1hJf`, t2v is `YhhmEf`; the
+  upload is `maseQ`. A body missing the uploaded media id, or carrying a `_t2v_` model key,
+  fails the run — after the fact, since the request is already on the wire, but it names
+  what Flow was actually asked to make instead of leaving a wrong clip unexplained.
+- **A request built without a model does not merely default — it inherits the editor's
+  remembered tier.** Runs built directly left `request.model` as `None`, so the composer
+  used whatever the editor last had; a queued MCP request (whose payload also carries no
+  model) could have inherited a 100-credit tier. Bind the documented default explicitly, and
+  log the *effective* model, not the requested one. Found by review, not by a run.
+- **An outer stage timeout smaller than the sum of the waits it wraps converts a
+  stage-named failure into a generic timeout.** Bound each leg on its own instead.
+
+## Reference attach — r2v slice 2 (#639)
+
+Recon `docs/superpowers/spikes/2026-09-05-migrated-r2v-attach-surface.md` (405 lines, seven
+rounds); e2e `tests/e2e/test_migrated_host_e2e.py`. Read this before re-mining that spike.
+
+- **References are NOT a chip slot on this host — they are `@` mentions in the prompt.**
+  Frames bind to `flow-prompt-box button.empty-chip`; a reference becomes a
+  `.mention-chip` inside the `contenteditable`, and the chip's `data-reference-type`
+  (`media` / `entity` / `likeness`) decides which wire slot carries its id. `entity_id`
+  being null does **not** mean nothing attached.
+- **The Ingredients submit is rpcid `MZZa6b`** — not `YhhmEf` (t2v) and not `eb1hJf`
+  (i2v). Several rounds of recon reported "r2v never submits" purely because only the
+  first was being watched. Any new sub-mode: find its rpcid before concluding anything.
+- **Omni 1.2's start+end submit (`nprQif`) names its rpc in the BODY only** — Omni 1.1's
+  carries it in the URL `rpcids`. A `page.route` keyed on the URL missed both Omni 1.2
+  submits in the #1178 spike and they were billed. Route every `batchexecute`
+  (`BATCHEXECUTE_GLOB`), read bodies with `request_body()` (raw `post_data` raises on
+  gzip), resolve the rpc with `url_rpcid(url) or body_rpcid(body)`, and pass other
+  requests on with `fallback()` so an outer guard (extend) still runs. Its key is
+  `macaron_cookie_i2v_fl_<n>s[_<res>]`.
+- **A `page.on("request")` check cannot stop a bill** — the request is already on its
+  way. Video submits are refused by the route guard in `submit_and_observe` (#1178); the
+  observer stays as the backstop for a request the route never saw.
+- **Enter commits a mention; a typed query alone inserts nothing** and leaves the picker
+  open. And mentions need real key events (`keyboard.type`) where prompt text needs
+  `insert_text` — the latter dispatches input events with no keystrokes, so the mention
+  plugin opens a picker with no query behind it. The two gestures cannot share a path,
+  because a newline in prompt text must not submit.
+- **Picker name matching is loose:** querying `"me"` matched an avatar named *Me* rather
+  than the uploaded `me.jpg`. Query the full filename, then verify chip-by-chip.
+- **The r2v model key is mode-specific** (`veo_3_1_r2v_lite_low_priority`), but the t2v
+  key it contrasts with carries **no mode infix at all**. A diagnostic regex written as a
+  mode alternation therefore says "no model key" for exactly the body it exists to
+  describe — a t2v key on an r2v submit, i.e. the picker having inserted nothing.
+- **r2v exists only at the base duration (8s), and below it Flow DEGRADES rather than
+  refuses.** At 4s/6s the app flattens the mention chips into plain prompt text and
+  submits `veo_3_1_t2v_lite_<n>s_low_priority` — a full-price text-to-video clip carrying
+  the file *names* and none of the images. The editor remembers the last duration, so a
+  run passing none inherits it; the composer pins the base tier best-effort and refuses an
+  explicit degrading duration at exit 11. **The media slot carries the ids even in the
+  degraded submits**, so "are the ids in the body?" is not a sufficient assertion — the
+  model key is. Measured at $0, three route-blocked runs varying only duration.
+- **A body assertion is only as good as its listener registration.** `_r2v_body_problem`
+  was written, unit-tested and green while `page.on("request", …)` stayed gated on
+  `expect_media_id is not None` — never true on the r2v path — so the check could not run
+  in a live run. **Assert the round trip: drive the real entry point and check the far end
+  observed it.** A unit test on either half of a join passes while the join is broken;
+  this is the same shape as #689 (a payload key read but never written) and the MCP r2v
+  guard that was stricter than the rule it fronted. Related:
+  [[dead-wiring-passes-every-gate]].
+
+## Image submit — the t2i / i2i slice (#639)
+
+- **On the classic migrated composer, `ogiZ0b` is synchronous, and that is the one place
+  on this host where a submit reply IS the terminal answer.** (Cohort qualifier: on #799's
+  agent-only composer `ogiZ0b` never fires — completion is read from the DOM there; see
+  [[flow-capabilities-are-cohort-dependent]].) Video submits (`YhhmEf` / `eb1hJf` / `MZZa6b`) start a
+  job and the result arrives later on `jwpduf` / `as29s`; the image submit's own reply
+  already carries completed records with signed JPEG URLs and dimensions, and there is
+  no polling rpc on that path at all. Note this explicitly whenever the point comes up,
+  because the standing rule is the opposite — [[intermediate-signal-is-not-terminal]]
+  was written from a null `MZZa6b` reply read as a refusal three times. Images are the
+  documented exception, not a counter-example to it.
+- **Both mechanisms are now MEASURED, and neither is push — do not re-open this.**
+  Image: `ogiZ0b` is dispatched once and **held open ~19.7 s**, answering with the
+  finished images; no poll at all. Video: `jwpduf` is a **fixed 5.00 s client timer**
+  owned by Flow's page — dispatch gaps stdev **3.5 ms** over 7 gaps, no collapse at
+  completion, nothing inbound between polls, each poll answered in under 0.81 s. Zero
+  WebSocket / SSE / gRPC on either path, and at idle. So the polling in
+  `migrated_composer.py` is the real mechanism, not a fallback; the driver observes
+  Flow's own traffic and adds none; and the 5 s interval is **a floor we read, not a
+  latency knob we hold**. Any "we could subscribe instead of polling" proposal is
+  refuted by measurement on both paths — spikes
+  `docs/superpowers/spikes/2026-09-14-generation-wire-no-push-channel.md` and
+  `docs/superpowers/spikes/2026-09-14-video-poll-is-a-fixed-client-timer.md`.
+  Still unlooked-at across the whole series: worker/service-worker-scoped traffic and
+  `WebTransport` (the CDP detector binds the page target only).
+- **The migrated page owns the image reCAPTCHA.** The labs client minted a token on the
+  pool's bootstrap page before the transport ran; on a moved account that page is the
+  `flow.google.com` grid, which carries no `enterprise.js`, so the mint failed before
+  any guard could classify it (#673). The client now skips minting when the transport
+  reports `uses_page_owned_image_recaptcha()` and lets the project page mint + submit.
+- **The UI transport never needed the client token at all (#891).** Nothing in
+  `ui_automation.py`, `drivers/` or `migrated_composer.py` reads `recaptcha_token`, and
+  `git log -S` shows it never did: Flow's page mints its own on click, on either host. The
+  capability is therefore unconditional. The earlier URL- and then latch-derived versions
+  existed only to decide a mint that was dead weight, and the dead mint was not harmless:
+  after a successful run the page is parked on `about:blank`, where it raised
+  `RecaptchaError` instead of exit 36. For UI images, exit 36 now comes from the
+  composer, which names the unported form. Review lesson: before tuning *when* a step
+  runs, grep whether anything consumes its output.
+- **Enumerate the axis before mapping to it.** The image aspect radiogroup carried four
+  radios — `crop_16_9`, `crop_landscape`, `crop_square`, `crop_9_16` — and no
+  `crop_portrait`. A driver that maps 3:4 to a guessed ligature does not fail as "not
+  ported"; it misses its selector and raises `UiSelectorDriftError` (exit 23), which
+  tells the user to file a frontend bug about a frontend that is fine. Refuse an
+  unmeasured axis value as an unported form (exit 36) and keep the measured set in its
+  own constant, so the difference between *observed* and *assumed* survives in code.
+- **The grid and the `@` picker are per-editor-load snapshots (#913, live e2e
+  2026-10-01).** A row that opened the editor one second after its parent was generated
+  polled the grid for 30 s without the new tile, and on another run searched the picker
+  three times with 0 options; the next row's fresh editor load found the same image at
+  once. To reference a just-generated image, reload the editor; waiting in the page does
+  not help. A reload resets the image settings, so re-apply them after it.

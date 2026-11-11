@@ -1,0 +1,196 @@
+"""Cloud storage helpers for gflow-cli.
+
+``storage_path()`` returns a local ``Path`` or a cloud ``UPath`` depending on
+``GFLOW_CLI_STORAGE_URI``.  Cloud deps are optional extras::
+
+    pip install gflow-cli[gcs]   # adds gcsfs
+    pip install gflow-cli[s3]    # adds s3fs + aiobotocore
+
+Security notes
+--------------
+* All keys are sanitised via ``_sanitize_key()`` — strips leading slashes and
+  collapses ``..`` segments — to prevent key-injection via API-controlled
+  ``media_id`` values.
+* ``GFLOW_CLI_STORAGE_URI`` is validated at settings load time; only ``gs://``
+  and ``s3://`` (plus ``memory://`` for tests) are accepted.
+* Cloud writes run inside ``asyncio.to_thread()`` so the Playwright event loop
+  is never stalled.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import posixpath
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gflow_cli.errors import Charged, NextAction
+
+# ---------------------------------------------------------------------------
+# Public type alias
+# ---------------------------------------------------------------------------
+
+#: Either a local ``pathlib.Path`` or a cloud ``UPath`` (UPath IS-A Path).
+AnyPath = Path
+
+_CLOUD_SCHEMES: tuple[str, ...] = ("gs://", "s3://", "memory://")
+
+
+# ---------------------------------------------------------------------------
+# Cloud metadata
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CloudStorageInfo:
+    """Metadata about a cloud-stored asset, persisted to the local DB."""
+
+    uri: str  # gs://bucket/prefix/key  or  s3://bucket/prefix/key
+    provider: str  # "gcs" | "s3"
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_key(key: str) -> str:
+    """Strip leading slashes and collapse ``..`` segments.
+
+    Prevents key-injection where an API-controlled ``media_id`` could escape
+    the configured storage prefix (e.g. ``../../other-bucket/secret``).
+    """
+    normalized = posixpath.normpath(key.lstrip("/"))
+    if normalized.startswith(".."):
+        msg = f"Unsafe storage key (path traversal detected): {key!r}"
+        raise ValueError(msg)
+    return normalized
+
+
+def _make_upath(uri: str) -> Path:
+    try:
+        from upath import UPath  # type: ignore[import-untyped]
+    except ImportError as exc:
+        msg = (
+            "Cloud storage requires universal_pathlib. "
+            "Install the matching extra:\n"
+            "  pip install 'gflow-cli[gcs]'   # Google Cloud Storage\n"
+            "  pip install 'gflow-cli[s3]'    # Amazon S3 / MinIO"
+        )
+        raise ImportError(
+            msg,
+        ) from exc
+    return UPath(uri)  # type: ignore[return-value]
+
+
+def _write_local(path: Path, data: bytes) -> None:
+    """Synchronous helper: mkdir + write_bytes for local paths."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def is_cloud_path(target: AnyPath) -> bool:
+    """Return ``True`` when *target* points to cloud storage, not local disk."""
+    s = str(target)
+    return any(s.startswith(scheme) for scheme in _CLOUD_SCHEMES)
+
+
+def cloud_info_from_path(target: AnyPath) -> CloudStorageInfo | None:
+    """Extract :class:`CloudStorageInfo` from *target*, or ``None`` for local paths."""
+    if not is_cloud_path(target):
+        return None
+    uri = str(target)
+    if uri.startswith("gs://"):
+        return CloudStorageInfo(uri=uri, provider="gcs")
+    if uri.startswith("s3://"):
+        return CloudStorageInfo(uri=uri, provider="s3")
+    return None  # memory:// is test-only; no persistent metadata needed
+
+
+def storage_path(storage_uri: str | None, output_dir: Path, key: str) -> AnyPath:
+    """Return a local ``Path`` or cloud ``UPath`` for the given relative *key*.
+
+    Args:
+        storage_uri: Configured ``GFLOW_CLI_STORAGE_URI``, e.g.
+                     ``"gs://my-bucket/gflow/"``.  ``None`` → local storage.
+        output_dir:  Local output root used when *storage_uri* is ``None``.
+        key:         Relative path within the storage root, e.g.
+                     ``"images/2026-05-27/abc_1.png"``.
+
+    Raises:
+        ValueError:  If *key* contains path-traversal components (``..``).
+        ImportError: If *storage_uri* is set but ``universal_pathlib`` is not
+                     installed.
+    """
+    safe_key = _sanitize_key(key)
+    if not storage_uri:
+        return output_dir / safe_key
+    return _make_upath(storage_uri) / safe_key
+
+
+def refuse_cloud_storage_for_local_file(storage_uri: str | None, what: str) -> None:
+    """Refuse *what* (an option that needs the clip as a local file) under cloud storage.
+
+    #1008: the clip comes back as a bucket object, which cannot be moved to a local
+    path or read by ffmpeg, and that used to fail only after Flow had billed it.
+    """
+    if storage_uri:
+        from gflow_cli.errors import ConfigurationError
+
+        raise ConfigurationError(
+            detail=(
+                f"{what} needs the clip as a local file, but GFLOW_CLI_STORAGE_URI "
+                f"stores it in {storage_uri}. Nothing was submitted."
+            ),
+            remediation_hint=(
+                f"Unset GFLOW_CLI_STORAGE_URI for this run, or drop {what} and fetch "
+                "the clip from the bucket."
+            ),
+        )
+
+
+async def write_asset_async(
+    target: AnyPath,
+    data: bytes,
+    *,
+    charged: Charged = "maybe",
+    next_action: NextAction = "reconcile",
+) -> None:
+    """Write *data* to *target* without blocking the asyncio event loop.
+
+    * **Local** ``Path``: creates parent directories then writes; runs in a
+      thread pool via ``asyncio.to_thread()``.
+    * **Cloud** ``UPath``: delegates to the fsspec backend (gcsfs / s3fs)
+      via ``asyncio.to_thread()`` so the Playwright event loop is not stalled.
+
+    Raises:
+        ConfigurationError: *target* cannot be written (#1091). By then Flow has
+            generated the asset, so callers salvage its id first (#1035). It reads
+            ``charged``/``next_action`` (#1201): ``maybe``/``reconcile`` by default, for an
+            asset Flow made; a free render passes ``no``/``fix_input``.
+    """
+    try:
+        if is_cloud_path(target):
+            await asyncio.to_thread(target.write_bytes, data)
+        else:
+            await asyncio.to_thread(_write_local, Path(str(target)), data)
+    except OSError as exc:
+        from gflow_cli.errors import ConfigurationError
+
+        # No path or bucket URI in the detail: it is persisted to the catalog.
+        raise ConfigurationError(
+            detail=f"Could not write the output file ({exc.strerror or type(exc).__name__})",
+            remediation_hint=(
+                "Point --out (or GFLOW_CLI_OUTPUT_DIR / GFLOW_CLI_STORAGE_URI) at a "
+                "location this process can write. The asset is still in the Flow project."
+            ),
+            charged=charged,
+            next_action=next_action,
+        ) from exc
