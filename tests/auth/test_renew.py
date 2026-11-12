@@ -138,21 +138,17 @@ async def test_a_failed_labs_session_request_still_returns_the_oracle_verdict(
 
 
 @pytest.mark.asyncio
-async def test_launches_headless_with_generation_flags(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_launches_the_stealth_chrome_off_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stealth_launches: list[dict[str, object]]
 ) -> None:
+    """ghostflow: renew opens clip_fixer's stealth Chrome off-screen, not a headless one."""
     mock_ap, _page, events = _playwright_mock()
     monkeypatch.setattr("gflow_cli.auth.strategies.async_playwright", mock_ap)
     _patch_verdict(monkeypatch, events, FlowSessionOutcome.AUTHENTICATED)
 
     await renew.renew_profile(tmp_path)
 
-    pw = mock_ap.return_value.__aenter__.return_value
-    kwargs = pw.chromium.launch_persistent_context.await_args.kwargs
-    assert kwargs["user_data_dir"] == str(tmp_path)
-    assert kwargs["headless"] is True
-    assert "--password-store=basic" in kwargs["args"]
-    assert "--enable-automation" in kwargs["ignore_default_args"]
+    assert stealth_launches == [{"profile_dir": tmp_path, "visible": False, "proxy": None}]
 
 
 @pytest.mark.asyncio

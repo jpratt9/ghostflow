@@ -31,6 +31,8 @@ from gflow_cli.api._engine import (
     run_teardown_step,
 )
 from gflow_cli.api._flow_bootstrap import AccountBootstrap
+from gflow_cli.api.stealth_chrome import CLOSE_TIMEOUT_S as STEALTH_CLOSE_TIMEOUT_S
+from gflow_cli.api.stealth_chrome import StealthChrome
 from gflow_cli.api._flow_characters import CharacterSurface
 from gflow_cli.api._flow_media_edit import MAX_UPSAMPLE_B64_LEN as MAX_UPSAMPLE_B64_LEN
 from gflow_cli.api._flow_session import (
@@ -124,6 +126,8 @@ class FlowApiClient(CharacterSurface, AccountBootstrap):
     transport via `page.request`). Auth = whatever cookies the profile dir
     has from a prior `gflow auth login`.
     """
+
+    _stealth: StealthChrome | None = None  # clip_fixer's stealth Chrome the context is attached to
 
     # --- lifecycle --------------------------------------------------------
 
@@ -411,12 +415,9 @@ class FlowApiClient(CharacterSurface, AccountBootstrap):
         """
         # Invariant: __aenter__ sets self._pw immediately before calling us.
         assert self._pw is not None
-        # issue #222 (macOS): pre-read the profile's Flow cookies BEFORE launching
-        # the headed context, so _ensure_context_session_cookie can seed them if the
-        # headed context can't decrypt the on-disk store. Must run pre-launch — the
-        # snapshot's fallback opens a headless context on the same profile, which
-        # would deadlock on the singleton lock once the headed context holds it.
-        await self._preread_flow_session_cookies()
+        # No issue #222 cookie pre-read: the stealth Chrome decrypts the profile's
+        # basic-store jar itself, while the pre-read's fallback opened a headless,
+        # non-stealth Chrome on the signed-in profile every run for nothing.
         kwargs = self._persistent_context_kwargs()
         if self._recorder is not None:
             self._recorder.note_har_pre_launch(self.settings.har_path)
@@ -451,12 +452,8 @@ class FlowApiClient(CharacterSurface, AccountBootstrap):
         # Attach journal listeners BEFORE any navigation/submission that can
         # produce relevant traffic (design §6.2 step 2, S30).
         self._attach_recorder_context(self._context)
-        # Hide the automation flag so reCAPTCHA Enterprise doesn't score
-        # the session as a bot — navigator.webdriver=true causes low-score
-        # tokens and HTTP 403 on batchGenerateImages.
-        await self._context.add_init_script(
-            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
-        )
+        # No navigator.webdriver init script: the stealth Chrome already reports
+        # false like a real one, where the getter's undefined was itself a tell.
         # issue #222: log whether the headed context loaded the Flow session
         # cookie and, if not (macOS can't decrypt the on-disk store), seed it
         # from the pre-launch snapshot.
@@ -495,7 +492,12 @@ class FlowApiClient(CharacterSurface, AccountBootstrap):
         """Launch the context and classify profile access versus contention failures."""
         assert self._pw is not None
         try:
-            return await self._pw.chromium.launch_persistent_context(**kwargs)
+            # clip_fixer's stealth Chrome on the profile, attached over CDP, in
+            # place of Playwright's own launch (kwargs still drive the guards).
+            self._stealth = StealthChrome()
+            return await self._stealth.open(
+                self._pw, self.profile_dir, proxy=self.settings.browser_proxy
+            )
         except Exception as exc:
             # Before _is_target_closed: an access denial can arrive as a
             # TargetClosedError too, and must not be reported as contention.
@@ -731,6 +733,18 @@ class FlowApiClient(CharacterSurface, AccountBootstrap):
                     )
                     or cancelled
                 )
+            if self._stealth is not None:
+                # The stealth Chrome isn't Playwright's, so the driver stop above
+                # leaves it running: its launcher quits it (cookies flush on quit).
+                cancelled = (
+                    await run_teardown_step(
+                        self._stealth.close(),
+                        timeout=STEALTH_CLOSE_TIMEOUT_S,
+                        owner="client",
+                        step="stealth_chrome_quit",
+                    )
+                    or cancelled
+                )
         finally:
             # Field resets must survive even cancellation (Ctrl-C mid-close),
             # or a reused client holds references to a dead BrowserContext.
@@ -739,6 +753,7 @@ class FlowApiClient(CharacterSurface, AccountBootstrap):
             self._page = None
             self._context = None
             self._pw = None
+            self._stealth = None
             # Release the profile lease LAST — after the context is closed and
             # the driver stopped — so the profile dir is genuinely free before
             # another process can acquire it (D3 release ordering). release() is

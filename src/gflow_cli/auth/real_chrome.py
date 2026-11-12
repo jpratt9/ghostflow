@@ -27,7 +27,6 @@ from .base import AuthStrategy
 from .internal_chromium import (
     UNVERIFIED_HINT,
     UNVERIFIED_MESSAGE,
-    login_launch_kwargs,
     poll_session_until_authenticated,
 )
 from .verification import record_account, verify_flow_profile
@@ -313,22 +312,23 @@ class RealChromeStrategy(AuthStrategy):
         # whole transport stack (which imports auth.verification) at import time.
         from gflow_cli.api._engine import CONTEXT_TEARDOWN_TIMEOUT_S, close_context_bounded
         from gflow_cli.api._engine import run_teardown_step as _teardown_step
+        from gflow_cli.api.stealth_chrome import CLOSE_TIMEOUT_S as STEALTH_CLOSE_TIMEOUT_S
+        from gflow_cli.api.stealth_chrome import StealthChrome
 
         from .strategies import async_playwright
 
         # Unwind order is pw -> lease, so the driver is stopped (and Chrome with
         # it) before the profile is freed for the next holder (D3).
         async with ProfileLease(profile_dir), async_playwright() as pw:
+            # clip_fixer's stealth Chrome, on screen for the sign-in, in place of
+            # Playwright's own launch.
+            stealth = StealthChrome()
             try:
-                ctx = await pw.chromium.launch_persistent_context(
-                    **login_launch_kwargs(
-                        profile_dir,
-                        headless,
-                        channel="chrome",
-                        proxy=get_settings().browser_proxy,
-                    ),
+                ctx = await stealth.open(
+                    pw, profile_dir, visible=True, proxy=get_settings().browser_proxy
                 )
             except Exception as exc:
+                await stealth.close()
                 # The bundled-Chromium fallback would hit the same held profile (#1059).
                 if (in_use := profile_in_use_error(exc, profile_dir)) is not None:
                     raise in_use from exc
@@ -356,6 +356,16 @@ class RealChromeStrategy(AuthStrategy):
                     timeout=CONTEXT_TEARDOWN_TIMEOUT_S,
                     owner="auth_login",
                     step="context_close",
+                )
+                # Closing an attached context only detaches: the launcher quits Chrome.
+                cancelled = (
+                    await _teardown_step(
+                        stealth.close(),
+                        timeout=STEALTH_CLOSE_TIMEOUT_S,
+                        owner="auth_login",
+                        step="stealth_chrome_quit",
+                    )
+                    or cancelled
                 )
             if cancelled is not None:
                 # Re-raised inside the `async with`, so the driver still stops

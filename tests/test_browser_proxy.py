@@ -214,16 +214,29 @@ async def test_every_launch_site_carries_the_proxy(
 
 
 def test_the_site_table_covers_every_launch_in_src() -> None:
-    """A new launch_persistent_context call must be added to SITES (drift guard, cf. #222)."""
+    """A new browser launch must be added to SITES (drift guard, cf. #222).
+
+    ghostflow: a launch is a ``launch_persistent_context`` call or a ``StealthChrome()``,
+    clip_fixer's stealth Chrome.
+    """
     counts: dict[str, int] = {}
     for path in SRC.rglob("*.py"):
         rel = path.relative_to(SRC).as_posix()
         if rel.startswith("api/transports/experimental/"):
             continue  # opt-in experimental transports are out of scope for #1036
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Attribute) and node.attr == "launch_persistent_context":
-                if isinstance(getattr(node, "ctx", None), ast.Load):
-                    counts[rel] = counts.get(rel, 0) + 1
+            playwright_launch = (
+                isinstance(node, ast.Attribute)
+                and node.attr == "launch_persistent_context"
+                and isinstance(getattr(node, "ctx", None), ast.Load)
+            )
+            stealth_launch = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "StealthChrome"
+            )
+            if playwright_launch or stealth_launch:
+                counts[rel] = counts.get(rel, 0) + 1
     expected: dict[str, int] = {}
     for site in SITES:
         rel = site.split("#")[0]

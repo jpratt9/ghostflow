@@ -209,7 +209,7 @@ async def test_aenter_partial_failure_tears_down_browser(
     unguarded failure would orphan the chrome process and lock the profile dir
     (regression: next run spirals into about:blank spam + TargetClosedError).
     The partial-setup guard owns cleanup here."""
-    fake_context.add_init_script = AsyncMock(side_effect=RuntimeError("boom mid-setup"))
+    fake_context.new_page = AsyncMock(side_effect=RuntimeError("boom mid-setup"))
     with patch("gflow_cli.api.client.async_playwright") as mock_pw_factory:
         pw = MagicMock()
         pw.stop = AsyncMock()

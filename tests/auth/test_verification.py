@@ -890,9 +890,12 @@ class TestMigratedHostFallback:
 
     @pytest.mark.asyncio
     async def test_an_unreachable_my_account_hands_off_to_the_workspace(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        stealth_launches: list[dict[str, object]],
     ) -> None:
-        """The handoff the workspace oracle exists for, with the bot flags masked first."""
+        """The handoff the workspace oracle exists for, in the off-screen stealth Chrome."""
         from gflow_cli.auth import verification
 
         attested = verification.FlowSessionStatus(
@@ -906,12 +909,11 @@ class TestMigratedHostFallback:
         self._patch(monkeypatch, mock_ap)
 
         assert await verification._verify_migrated_host_fallback(tmp_path, "t") is attested
+        assert stealth_launches == [{"profile_dir": tmp_path, "visible": False, "proxy": None}]
         pw = mock_ap.return_value.__aenter__.return_value
-        kwargs = pw.chromium.launch_persistent_context.await_args.kwargs
-        assert "--enable-automation" in kwargs["ignore_default_args"]
-        assert "--disable-blink-features=AutomationControlled" in kwargs["args"]
         ctx = pw.chromium.launch_persistent_context.return_value
-        assert "webdriver" in ctx.add_init_script.await_args.args[0]
+        # No navigator.webdriver patch: the stealth Chrome reports false like a real one.
+        ctx.add_init_script.assert_not_awaited()
 
 
 class TestMigratedHostFallbackChannel:
@@ -926,38 +928,22 @@ class TestMigratedHostFallbackChannel:
     successfully on bundled Chromium.
     """
 
-    @staticmethod
-    def _launch_kwargs(mock_ap: MagicMock) -> dict:
-        pw = mock_ap.return_value.__aenter__.return_value
-        return pw.chromium.launch_persistent_context.await_args.kwargs
-
     @pytest.mark.asyncio
-    async def test_a_bundled_chromium_profile_is_probed_with_bundled_chromium(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    async def test_every_profile_is_probed_in_the_stealth_chrome(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        stealth_launches: list[dict[str, object]],
     ) -> None:
-        """No strategy marker = an `--browser internal` profile: channel must be None."""
-        from gflow_cli.auth.verification import _verify_migrated_host_fallback
-
-        mock_ap = _migrated_mock()
-        monkeypatch.setattr("gflow_cli.auth.strategies.async_playwright", mock_ap)
-
-        result = await _verify_migrated_host_fallback(tmp_path, "t")
-
-        assert result is not None, "a bundled-Chromium profile must still verify"
-        assert self._launch_kwargs(mock_ap)["channel"] is None
-
-    @pytest.mark.asyncio
-    async def test_a_chrome_profile_on_a_host_without_chrome_falls_back_to_bundled(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The reported host: chrome marker, no Chrome at Playwright's path → channel None."""
+        """ghostflow: the probe opens clip_fixer's stealth Chrome whatever engine wrote the
+        profile, so there is no channel to pick; the #477 guard still sees the profile's own."""
         from gflow_cli.auth.verification import _verify_migrated_host_fallback
 
         (tmp_path / ".gflow_browser_strategy").write_text("chrome", encoding="utf-8")
         mock_ap = _migrated_mock()
         monkeypatch.setattr("gflow_cli.auth.strategies.async_playwright", mock_ap)
         monkeypatch.setattr(
-            "gflow_cli.browser_manager.is_playwright_chrome_channel_available", lambda: False
+            "gflow_cli.browser_manager.is_playwright_chrome_channel_available", lambda: True
         )
         guarded: list[str | None] = []
         monkeypatch.setattr(
@@ -968,27 +954,8 @@ class TestMigratedHostFallbackChannel:
         result = await _verify_migrated_host_fallback(tmp_path, "t")
 
         assert result is not None
-        assert self._launch_kwargs(mock_ap)["channel"] is None
-        assert guarded == [None], "the #477 guard must run on the bundled fallback"
-
-    @pytest.mark.asyncio
-    async def test_a_chrome_profile_is_probed_with_chrome(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The Chrome-strategy path keeps its behaviour exactly."""
-        from gflow_cli.auth.verification import _verify_migrated_host_fallback
-
-        (tmp_path / ".gflow_browser_strategy").write_text("chrome", encoding="utf-8")
-        mock_ap = _migrated_mock()
-        monkeypatch.setattr("gflow_cli.auth.strategies.async_playwright", mock_ap)
-        monkeypatch.setattr(
-            "gflow_cli.browser_manager.is_playwright_chrome_channel_available", lambda: True
-        )
-
-        result = await _verify_migrated_host_fallback(tmp_path, "t")
-
-        assert result is not None
-        assert self._launch_kwargs(mock_ap)["channel"] == "chrome"
+        assert stealth_launches == [{"profile_dir": tmp_path, "visible": False, "proxy": None}]
+        assert guarded == ["chrome"]
 
     @pytest.mark.asyncio
     async def test_the_engine_downgrade_guard_still_fails_closed(

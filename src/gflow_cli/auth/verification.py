@@ -299,11 +299,8 @@ async def verify_flow_session(
     status_code: int
     body: str
     try:
-        from gflow_cli.browser_manager import (
-            browser_proxy_kwargs,
-            disable_features_args,
-            ensure_profile_engine_compatible,
-        )
+        from gflow_cli.api.stealth_chrome import StealthChrome
+        from gflow_cli.browser_manager import ensure_profile_engine_compatible
 
         # Own the profile for this headless probe context (D3). Lease is the
         # OUTER context so it releases only after the driver stops. Contention
@@ -316,19 +313,20 @@ async def verify_flow_session(
             # fail-closed wrapper, so the refusal maps to VERIFICATION_ERROR.
             ensure_profile_engine_compatible(profile_dir, channel)
             async with async_playwright() as pw:
-                ctx = await pw.chromium.launch_persistent_context(
-                    user_data_dir=str(profile_dir),
-                    channel=channel,
-                    headless=True,
-                    args=["--password-store=basic", *disable_features_args()],
-                    **browser_proxy_kwargs(get_settings().browser_proxy),
-                )
+                # clip_fixer's stealth Chrome off-screen, in place of a headless launch.
+                stealth = StealthChrome()
                 try:
-                    cookies = await ctx.cookies()
-                    google_session = any(c.get("name") == "SAPISID" for c in cookies)
-                    status_code, body = await _fetch_session(ctx)
+                    ctx = await stealth.open(
+                        pw, profile_dir, proxy=get_settings().browser_proxy
+                    )
+                    try:
+                        cookies = await ctx.cookies()
+                        google_session = any(c.get("name") == "SAPISID" for c in cookies)
+                        status_code, body = await _fetch_session(ctx)
+                    finally:
+                        await ctx.close()
                 finally:
-                    await ctx.close()
+                    await stealth.close()
     # Fail-closed: any failure here yields VERIFICATION_ERROR, never AUTHENTICATED.
     except Exception as exc:
         logger.warning("auth_flow_session_probe_error", source=source, error=type(exc).__name__)
@@ -526,10 +524,9 @@ async def _verify_migrated_host_fallback(
     GOOGLE_SESSION_ONLY. On the bundled path the #477 engine-downgrade guard
     runs first; a refusal is a probe that cannot run and maps to None.
     """
+    from gflow_cli.api.stealth_chrome import StealthChrome
     from gflow_cli.browser_manager import (
-        browser_proxy_kwargs,
         channel_for_profile,
-        disable_features_args,
         ensure_profile_engine_compatible,
     )
 
@@ -539,20 +536,14 @@ async def _verify_migrated_host_fallback(
         channel = channel_for_profile(profile_dir)
         ensure_profile_engine_compatible(profile_dir, channel)
         async with async_playwright() as pw:
-            ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                channel=channel,
-                headless=True,
-                # Same flags as renew.py: the workspace read below visits Flow itself.
-                ignore_default_args=["--enable-automation", "--no-sandbox"],
-                args=[
-                    "--password-store=basic",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    *disable_features_args(),
-                ],
-                **browser_proxy_kwargs(get_settings().browser_proxy),
-            )
+            # clip_fixer's stealth Chrome off-screen, as renew.py: the workspace
+            # read below visits Flow itself.
+            stealth = StealthChrome()
+            try:
+                ctx = await stealth.open(pw, profile_dir, proxy=get_settings().browser_proxy)
+            except BaseException:
+                await stealth.close()
+                raise
             try:
                 if not has_migrated_app_session(await ctx.cookies()):
                     return None
@@ -564,12 +555,12 @@ async def _verify_migrated_host_fallback(
                     logger.warning(
                         "auth_myaccount_probe_unavailable", source=source, error=type(exc).__name__
                     )
-                    await ctx.add_init_script(
-                        "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
-                    )
                     return await _verify_migrated_workspace(ctx, source)
             finally:
-                await ctx.close()
+                try:
+                    await ctx.close()
+                finally:
+                    await stealth.close()
     except Exception as exc:
         logger.warning(
             "auth_migrated_fallback_probe_error", source=source, error=type(exc).__name__

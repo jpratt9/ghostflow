@@ -139,7 +139,7 @@ async def _await_labs_refresh(page: Any, source: str) -> bool | None:
 
 
 async def renew_profile(profile_dir: Path, *, source: str = "renew") -> RenewResult:
-    """Refresh ``profile_dir``'s session headlessly and report what was observed.
+    """Refresh ``profile_dir``'s session in the off-screen stealth Chrome and report what was observed.
 
     Raises ``ProfileLockedError`` when another gflow process holds the profile
     and ``ProfileEngineDowngradeError`` when the profile was written by a newer
@@ -151,11 +151,10 @@ async def renew_profile(profile_dir: Path, *, source: str = "renew") -> RenewRes
     """
     from playwright.async_api import Error as PlaywrightError
 
+    from gflow_cli.api.stealth_chrome import StealthChrome
     from gflow_cli.api.transports._common import FLOW_URL, flow_host_kind, flow_landing_kind
     from gflow_cli.browser_manager import (
-        browser_proxy_kwargs,
         channel_for_profile,
-        disable_features_args,
         ensure_profile_engine_compatible,
     )
     from gflow_cli.config import get_settings
@@ -171,26 +170,15 @@ async def renew_profile(profile_dir: Path, *, source: str = "renew") -> RenewRes
     async with ProfileLease(profile_dir):
         ensure_profile_engine_compatible(profile_dir, channel)
         async with async_playwright() as pw:
-            # Same flags as the generation context (api/client.py): the basic
-            # password store is how every gflow launch seals and reads cookies,
-            # and the automation flags would mark the visit as a bot.
-            ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                channel=channel,
-                headless=True,
-                ignore_default_args=["--enable-automation", "--no-sandbox"],
-                args=[
-                    "--password-store=basic",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    *disable_features_args(),
-                ],
-                **browser_proxy_kwargs(get_settings().browser_proxy),
-            )
+            # clip_fixer's stealth Chrome off-screen, as the generation context
+            # runs (api/client.py), in place of a headless Playwright launch.
+            stealth = StealthChrome()
             try:
-                await ctx.add_init_script(
-                    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
-                )
+                ctx = await stealth.open(pw, profile_dir, proxy=get_settings().browser_proxy)
+            except BaseException:
+                await stealth.close()
+                raise
+            try:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 try:
                     await page.goto(
@@ -225,9 +213,13 @@ async def renew_profile(profile_dir: Path, *, source: str = "renew") -> RenewRes
                         "auth_renew_labs_session_error", source=source, error=type(exc).__name__
                     )
             finally:
-                # Closing the persistent context is what flushes the rotated
-                # cookies to the profile's on-disk store.
-                await ctx.close()
+                # Chrome quitting is what flushes the rotated cookies to the
+                # profile's on-disk store; closing an attached context only detaches.
+                try:
+                    await ctx.close()
+                except PlaywrightError:
+                    pass
+                await stealth.close()
 
     # Outside the lease: the verifier's cookie-decrypt fallback takes its own,
     # and a same-process double acquire fails fast by design.

@@ -269,14 +269,14 @@ async def test_client_with_preinitialized_transport_does_not_own_lifecycle(
 
 
 @pytest.mark.asyncio
-async def test_enter_setup_routes_launch_through_kwargs_seam(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_enter_setup_launches_the_stealth_chrome_on_the_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stealth_launches: list[dict[str, object]]
 ) -> None:
-    """__aenter__ must launch the persistent context via the
-    _persistent_context_kwargs() seam, not a stale inline dict, so a dev-scoped
-    recording subclass override actually takes effect. The pin test alone cannot
-    catch a re-inlined call site; this can."""
+    """ghostflow: __aenter__ opens clip_fixer's stealth Chrome on the profile, off-screen,
+    through the configured proxy. _persistent_context_kwargs() still feeds the launch
+    guards and logs, once."""
     monkeypatch.delenv("GFLOW_CLI_TRANSPORT", raising=False)
+    monkeypatch.setenv("GFLOW_CLI_BROWSER_PROXY", "http://127.0.0.1:7897")
     _patch_playwright(monkeypatch)
     fake = _FakeTransport()
     seam_calls: list[object] = []
@@ -288,15 +288,12 @@ async def test_enter_setup_routes_launch_through_kwargs_seam(
         return kwargs
 
     monkeypatch.setattr(FlowApiClient, "_persistent_context_kwargs", spy)
-    launch_mock = None
-    async with FlowApiClient(profile_dir=tmp_path, transport=fake) as client:
-        launch_mock = client._pw.chromium.launch_persistent_context
-    # The seam was consulted exactly once AND the launch was invoked with its
-    # exact output. A re-inlined / stale dict at the call site fails the kwargs
-    # equality here, not merely the consult count.
+    async with FlowApiClient(profile_dir=tmp_path, transport=fake):
+        pass
     assert len(seam_calls) == 1
-    assert launch_mock is not None
-    assert launch_mock.call_args.kwargs == seam_calls[0]
+    assert stealth_launches == [
+        {"profile_dir": tmp_path, "visible": False, "proxy": "http://127.0.0.1:7897"}
+    ]
 
 
 @pytest.mark.asyncio

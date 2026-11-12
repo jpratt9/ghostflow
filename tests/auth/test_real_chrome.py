@@ -281,7 +281,9 @@ class TestPlaywrightAutoClose:
         return gflow_home, gflow_home / "profile_default"
 
     @pytest.mark.asyncio
-    async def test_default_path_owns_and_closes_the_browser(self, tmp_path: Path) -> None:
+    async def test_default_path_owns_and_closes_the_browser(
+        self, tmp_path: Path, stealth_launches: list[dict[str, Any]]
+    ) -> None:
         """Chrome channel resolvable -> Playwright drives the login and closes it."""
         gflow_home, profile_dir = self._home(tmp_path)
         ap, pw, ctx = _build_fake_playwright()
@@ -306,18 +308,8 @@ class TestPlaywrightAutoClose:
 
         subprocess_exec.assert_not_awaited()
         ctx.close.assert_awaited()
-        kwargs = pw.chromium.launch_persistent_context.call_args.kwargs
-        assert kwargs["user_data_dir"] == str(profile_dir)
-        assert kwargs["channel"] == "chrome"
-        assert kwargs["headless"] is False
-        assert kwargs["no_viewport"] is True
-        assert kwargs["chromium_sandbox"] is True
-        assert kwargs["ignore_default_args"] == ["--enable-automation"]
-        assert "viewport" not in kwargs
-        launch_args = kwargs["args"]
-        assert "--disable-blink-features=AutomationControlled" in launch_args
-        assert "--window-size=1920,1080" in launch_args
-        assert "--password-store=basic" in launch_args
+        # ghostflow: the sign-in window is clip_fixer's stealth Chrome, on screen.
+        assert stealth_launches == [{"profile_dir": profile_dir, "visible": True, "proxy": None}]
         # The durability check still runs, outside the lease, exactly as before.
         assert (profile_dir / ".gflow_browser_strategy").read_text(encoding="utf-8") == "chrome"
         assert (profile_dir / ".gflow_account").read_text(encoding="utf-8") == "test@example.com"

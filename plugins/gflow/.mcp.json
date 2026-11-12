@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "gflow": {
-      "command": "gflow",
+      "command": "ghostflow",
       "args": ["mcp", "run"]
     }
   }

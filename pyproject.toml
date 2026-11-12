@@ -1,6 +1,6 @@
 [project]
 name = "gflow-cli"
-version = "0.97.0"
+version = "0.97.1"
 description = "CLI and MCP server for Google Flow — drive Veo text-to-video, image-to-video and Imagen image generation from the terminal."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -151,16 +151,8 @@ patchright = [
 ]
 
 [project.scripts]
-gflow = "gflow_cli.cli:main"
-flow = "gflow_cli.cli:main"
-# Third alias, and it earns its keep: `uvx <name>` runs the console script whose
-# name matches the *package*, so without this `uvx gflow-cli mcp run` fails with
-# uv's own "Use `uvx --from gflow-cli <EXECUTABLE-NAME>` instead" (verified against
-# 0.74.0). The MCP registry's server.json builds exactly that `uvx <identifier>`
-# command from the PyPI identifier and has no field for a differing executable
-# name, so a listing without this alias would be broken on arrival. It is also
-# what a user types first, the package being what they just installed.
-gflow-cli = "gflow_cli.cli:main"
+# ghostflow: gflow-cli on clip_fixer's stealth Chrome, under its own command.
+ghostflow = "gflow_cli.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ffroliva/gflow-cli"

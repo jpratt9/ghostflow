@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import structlog
@@ -87,6 +88,38 @@ def pytest_configure(config: pytest.Config) -> None:
     if basetemp:
         ceilings = [str(Path(basetemp).resolve().parent), os.environ.get("GIT_CEILING_DIRECTORIES")]
         os.environ["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(c for c in ceilings if c)
+
+
+@pytest.fixture(autouse=True)
+def stealth_launches(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """ghostflow: no unit test starts clip_fixer's stealth Chrome, a real browser.
+
+    Every launch goes through ``StealthChrome``; here it hands the launch to the
+    test's fake Playwright ``launch_persistent_context`` instead, as gflow's own
+    launch did, with the proxy as gflow's ``proxy`` kwarg. Returns the launches
+    (profile_dir, visible, proxy) for tests that check them.
+    tests/api/test_stealth_chrome.py imports the real class before this runs and
+    fakes its launcher process itself.
+    """
+    from gflow_cli.browser_manager import browser_proxy_kwargs
+
+    launches: list[dict[str, Any]] = []
+
+    class _FakeStealthChrome:
+        async def open(
+            self, pw: Any, profile_dir: Path, *, visible: bool = False, proxy: str | None = None
+        ) -> Any:
+            launches.append({"profile_dir": Path(profile_dir), "visible": visible, "proxy": proxy})
+            return await pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir), **browser_proxy_kwargs(proxy)
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("gflow_cli.api.stealth_chrome.StealthChrome", _FakeStealthChrome)
+    monkeypatch.setattr("gflow_cli.api.client.StealthChrome", _FakeStealthChrome)
+    return launches
 
 
 @pytest.fixture(autouse=True)

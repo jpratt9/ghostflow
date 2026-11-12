@@ -10,9 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 import structlog
 
 from gflow_cli.browser_manager import (
-    browser_proxy_kwargs,
     channel_for_profile,
-    disable_features_args,
     profile_in_use_error,
 )
 from gflow_cli.config import get_settings
@@ -175,16 +173,15 @@ async def _get_chrome_cookies_playwright(profile_dir: Path) -> ChromeCookieSnaps
     # the OUTER context so it releases only after the driver stops (inner
     # async_playwright exits first). Contention -> ProfileLockedError before the
     # headless Chrome launches.
+    from gflow_cli.api.stealth_chrome import StealthChrome
+
     async with ProfileLease(profile_dir), async_playwright() as pw:
+        # clip_fixer's stealth Chrome off-screen, in place of a headless launch.
+        stealth = StealthChrome()
         try:
-            ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                channel=channel,
-                headless=True,
-                args=["--password-store=basic", *disable_features_args()],
-                **browser_proxy_kwargs(get_settings().browser_proxy),
-            )
+            ctx = await stealth.open(pw, profile_dir, proxy=get_settings().browser_proxy)
         except Exception as exc:
+            await stealth.close()
             if (in_use := profile_in_use_error(exc, profile_dir)) is not None:
                 raise in_use from exc  # the user's own Chrome holds it (#1059)
             raise
@@ -192,7 +189,10 @@ async def _get_chrome_cookies_playwright(profile_dir: Path) -> ChromeCookieSnaps
             all_cookies = await ctx.cookies()
             flow_cookies = await ctx.cookies([_FLOW_COOKIE_URL])
         finally:
-            await ctx.close()
+            try:
+                await ctx.close()
+            finally:
+                await stealth.close()
 
     # #222: derive the flow cookies from the FULL jar (domain-filtered), NOT from
     # ctx.cookies([_FLOW_COOKIE_URL]) — that URL filter only returns cookies whose

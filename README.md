@@ -1,3 +1,32 @@
+# ghostflow
+
+**gflow-cli on a stealth browser.** ghostflow is a fork of [ffroliva/gflow-cli](https://github.com/ffroliva/gflow-cli) (MIT). It keeps every gflow command, but drives Google Flow through a stealth Chrome instead of one Playwright launches.
+
+### What's different from gflow-cli
+
+- **Every browser it opens is the stealth Chrome.** Generation, `auth login`, `auth renew` and the sign-in checks start Chrome through clip_fixer's stealth setup: SeleniumBase UC mode with a fingerprint that matches the machine it runs on. gflow's Playwright code then drives that Chrome over CDP, and every new tab gets the same stealth scripts as the first.
+- **Off-screen.** The window opens at -30000,-30000, except during `auth login`, where you sign in.
+- **No `navigator.webdriver` patch.** gflow set it to `undefined`, which a real Chrome never reports.
+- **No headless cookie pre-read before each run.** The stealth Chrome reads the profile's cookies itself.
+- **The command is `ghostflow`.** Messages inside still say `gflow`.
+
+### Requirements
+
+- clip_fixer's stealth browser (its `scraper` package) at `~/dev/clip_fixer`, or wherever `GFLOW_CLI_CLIP_FIXER` points. It isn't part of this repo.
+- A Python with clip_fixer's requirements: `python3`, or whatever `GFLOW_CLI_STEALTH_PYTHON` names.
+- Google Chrome.
+
+### Install
+
+```bash
+uv tool install --with playwright==1.61.0 .
+ghostflow auth login --browser chrome
+```
+
+Everything below is gflow-cli's own README. Where it says `gflow …`, run `ghostflow …`.
+
+---
+
 <!-- mcp-name: io.github.ffroliva/gflow-cli -->
 
 # gflow-cli
