@@ -1,12 +1,12 @@
-"""StealthChrome: clip_fixer's stealth Chrome in place of a Playwright launch.
+"""StealthChrome: clip_fixer's stealth Chrome in place of a Playwright launch, shared across gflow processes.
 
 The launcher process and Playwright are faked; nothing starts a browser.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
+import os
 import signal
 from pathlib import Path
 from typing import Any
@@ -15,55 +15,67 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from gflow_cli.api import stealth_chrome
-from gflow_cli.api.stealth_chrome import LAUNCHER, StealthChrome
+from gflow_cli.api.stealth_chrome import IDLE_S, LAUNCHER, StealthChrome
 
 PAGE_CDP = [["Page.addScriptToEvaluateOnNewDocument", {"source": "stealth()"}]]
-ADDRESS_LINE = (
-    b"GFLOW_STEALTH "
-    + json.dumps({"cdp": "127.0.0.1:9222", "browser_pid": 4321, "page_cdp": PAGE_CDP}).encode()
-    + b"\n"
-)
+ME = os.getpid()
 
 
-class _FakeProc:
-    """The launcher process: its stdout lines, a stdin to close, and whether it exits when asked."""
+def _state_info(launcher_pid: int, **overrides: Any) -> dict[str, Any]:
+    return {
+        "launcher_pid": launcher_pid,
+        "browser_pid": 4321,
+        "cdp": "127.0.0.1:9222",
+        "page_cdp": PAGE_CDP,
+        "visible": False,
+        "proxy": None,
+    } | overrides
 
-    def __init__(self, lines: list[bytes], *, exits: bool = True) -> None:
-        self.stdout = asyncio.StreamReader()
-        for line in lines:
-            self.stdout.feed_data(line)
-        self.stdout.feed_eof()
-        self.stdin = MagicMock()
-        self.returncode: int | None = None
+
+class _FakeLauncher:
+    """A launcher process: once started, it writes its state file, unless told it fails."""
+
+    pid = 777
+
+    def __init__(self, args: list[str], *, starts: bool) -> None:
+        self.args = args
         self.killed = False
-        self._exits = exits
+        self._failed = not starts
+        if starts:
+            state = Path(args[args.index("--state") + 1])
+            state.write_text(json.dumps(_state_info(self.pid, visible="--visible" in args)))
 
-    async def wait(self) -> int:
-        if not self._exits:
-            await asyncio.sleep(3600)
-        self.returncode = 0
-        return 0
+    def poll(self) -> int | None:
+        return 1 if self._failed else None
 
     def kill(self) -> None:
         self.killed = True
 
 
 @pytest.fixture
-def spawned(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Record how the launcher is started and hand back the fake process set in ``spawned["proc"]``."""
-    record: dict[str, Any] = {}
+def world(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Fakes for the launcher (``world["launches"]``), which pids are alive and the signals sent."""
+    record: dict[str, Any] = {"launches": [], "alive": {ME, _FakeLauncher.pid}, "signals": [], "starts": True}
 
-    async def fake_exec(*args: Any, **kwargs: Any) -> _FakeProc:
-        record["args"], record["kwargs"] = args, kwargs
-        return record["proc"]
+    def popen(args: list[str], **kwargs: Any) -> _FakeLauncher:
+        launcher = _FakeLauncher(args, starts=record["starts"])
+        record["launches"].append((launcher, kwargs))
+        return launcher
 
-    monkeypatch.setattr(stealth_chrome.asyncio, "create_subprocess_exec", fake_exec)
+    def kill(pid: int, sig: int) -> None:
+        record["signals"].append((pid, sig))
+        if sig in (signal.SIGTERM, signal.SIGKILL):
+            record["alive"].discard(pid)
+
+    monkeypatch.setattr(stealth_chrome.subprocess, "Popen", popen)
+    monkeypatch.setattr(stealth_chrome, "_alive", lambda pid: pid in record["alive"])
+    monkeypatch.setattr(stealth_chrome.os, "kill", kill)
     return record
 
 
 def _fake_playwright() -> tuple[Any, Any, Any, Any, Any]:
     session = MagicMock(send=AsyncMock())
-    page = MagicMock(name="page")
+    page = MagicMock(name="page", close=AsyncMock())
     context = MagicMock(name="context")
     context.new_page = AsyncMock(return_value=page)
     context.new_cdp_session = AsyncMock(return_value=session)
@@ -79,49 +91,93 @@ def _profile(tmp_path: Path) -> Path:
     return profile
 
 
-async def test_open_attaches_over_cdp_and_cloaks_every_new_tab(
-    tmp_path: Path, spawned: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+def _state(tmp_path: Path) -> Path:
+    return tmp_path / "stealth_profile_someone.json"
+
+
+async def test_the_first_open_starts_a_detached_launcher_and_attaches(
+    tmp_path: Path, world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("GFLOW_CLI_STEALTH_PYTHON", "/opt/clip-fixer/python3")
-    spawned["proc"] = _FakeProc([b"[INFO] clip_fixer chatter\n", ADDRESS_LINE])
-    pw, _browser, context, page, session = _fake_playwright()
+    pw, _browser, context, *_ = _fake_playwright()
     profile = _profile(tmp_path)
 
     ctx = await StealthChrome().open(pw, profile)
 
-    assert spawned["args"] == ("/opt/clip-fixer/python3", str(LAUNCHER), str(profile))
+    (launcher, kwargs), = world["launches"]
+    assert launcher.args == [
+        "/opt/clip-fixer/python3", str(LAUNCHER), str(profile),
+        "--state", str(_state(tmp_path)), "--idle", str(IDLE_S),
+    ]
+    assert kwargs["start_new_session"] is True
     pw.chromium.connect_over_cdp.assert_awaited_once_with("http://127.0.0.1:9222")
     assert ctx is context
-    assert (tmp_path / "stealth_launcher.log").exists()
-    assert await ctx.new_page() is page
-    context.new_cdp_session.assert_awaited_once_with(page)
-    session.send.assert_awaited_once_with(*PAGE_CDP[0])
+    assert (tmp_path / f"{_state(tmp_path).name}.users" / str(ME)).exists()
 
 
-async def test_open_visible_asks_the_launcher_for_an_on_screen_window(
-    tmp_path: Path, spawned: dict[str, Any]
+async def test_a_caller_named_in_the_env_keeps_the_browser_after_this_process(
+    tmp_path: Path, world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spawned["proc"] = _FakeProc([ADDRESS_LINE])
+    monkeypatch.setenv(stealth_chrome.USER_PID_ENV, "4242")
+    pw, *_ = _fake_playwright()
+    chrome = StealthChrome()
+    await chrome.open(pw, _profile(tmp_path))
+
+    await chrome.close()
+
+    users = tmp_path / f"{_state(tmp_path).name}.users"
+    assert (users / "4242").exists()  # the launcher clears it once 4242 is gone
+    assert not (users / str(ME)).exists()
+
+
+async def test_a_second_open_attaches_to_the_running_chrome(
+    tmp_path: Path, world: dict[str, Any]
+) -> None:
+    _state(tmp_path).write_text(json.dumps(_state_info(ME, cdp="127.0.0.1:9333")))
+    pw, *_ = _fake_playwright()
+
+    await StealthChrome().open(pw, _profile(tmp_path))
+
+    assert world["launches"] == []
+    pw.chromium.connect_over_cdp.assert_awaited_once_with("http://127.0.0.1:9333")
+
+
+async def test_an_off_screen_chrome_is_replaced_for_a_visible_sign_in(
+    tmp_path: Path, world: dict[str, Any]
+) -> None:
+    world["alive"].add(5555)
+    _state(tmp_path).write_text(json.dumps(_state_info(5555)))
     pw, *_ = _fake_playwright()
 
     await StealthChrome().open(pw, _profile(tmp_path), visible=True)
 
-    assert spawned["args"][-1] == "--visible"
+    assert (5555, signal.SIGTERM) in world["signals"]
+    (launcher, _kwargs), = world["launches"]
+    assert launcher.args[-3:] == ["--idle", "0", "--visible"]
 
 
-async def test_open_hands_the_proxy_to_the_launcher(tmp_path: Path, spawned: dict[str, Any]) -> None:
-    spawned["proc"] = _FakeProc([ADDRESS_LINE])
+async def test_a_dead_launchers_state_is_replaced(tmp_path: Path, world: dict[str, Any]) -> None:
+    _state(tmp_path).write_text(json.dumps(_state_info(6666)))  # 6666 isn't alive
+    pw, *_ = _fake_playwright()
+
+    await StealthChrome().open(pw, _profile(tmp_path))
+
+    assert len(world["launches"]) == 1
+
+
+async def test_the_proxy_goes_to_the_launcher(tmp_path: Path, world: dict[str, Any]) -> None:
     pw, *_ = _fake_playwright()
 
     await StealthChrome().open(pw, _profile(tmp_path), proxy="http://127.0.0.1:7897")
 
-    assert spawned["args"][-2:] == ("--proxy-server", "http://127.0.0.1:7897")
+    (launcher, _kwargs), = world["launches"]
+    assert launcher.args[-2:] == ["--proxy-server", "http://127.0.0.1:7897"]
 
 
-async def test_open_fails_when_the_launcher_exits_without_an_address(
-    tmp_path: Path, spawned: dict[str, Any]
+async def test_open_fails_when_the_launcher_exits_without_starting_chrome(
+    tmp_path: Path, world: dict[str, Any]
 ) -> None:
-    spawned["proc"] = _FakeProc([b"Traceback (most recent call last):\n"])
+    world["starts"] = False
     pw, *_ = _fake_playwright()
 
     with pytest.raises(RuntimeError, match="didn't start"):
@@ -129,37 +185,26 @@ async def test_open_fails_when_the_launcher_exits_without_an_address(
     pw.chromium.connect_over_cdp.assert_not_awaited()
 
 
-async def test_close_detaches_and_lets_the_launcher_quit_chrome(
-    tmp_path: Path, spawned: dict[str, Any]
+async def test_tabs_are_cloaked_closed_when_done_and_the_browser_left_open(
+    tmp_path: Path, world: dict[str, Any]
 ) -> None:
-    proc = spawned["proc"] = _FakeProc([ADDRESS_LINE])
-    pw, browser, *_ = _fake_playwright()
+    pw, browser, context, page, session = _fake_playwright()
     chrome = StealthChrome()
-    await chrome.open(pw, _profile(tmp_path))
+    ctx = await chrome.open(pw, _profile(tmp_path))
+
+    assert await ctx.new_page() is page
+    context.new_cdp_session.assert_awaited_once_with(page)
+    session.send.assert_awaited_once_with(*PAGE_CDP[0])
+    await ctx.close()  # what gflow's teardown calls
+    page.close.assert_awaited_once()
+    browser.close.assert_not_awaited()
 
     await chrome.close()
 
     browser.close.assert_awaited_once()
-    proc.stdin.close.assert_called_once()
-    assert proc.returncode == 0
-    assert not proc.killed
-
-
-async def test_close_kills_the_launcher_and_chrome_when_quitting_hangs(
-    tmp_path: Path, spawned: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    proc = spawned["proc"] = _FakeProc([ADDRESS_LINE], exits=False)
-    killed: list[tuple[int, int]] = []
-    monkeypatch.setattr(stealth_chrome, "QUIT_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(stealth_chrome.os, "kill", lambda pid, sig: killed.append((pid, sig)))
-    pw, *_ = _fake_playwright()
-    chrome = StealthChrome()
-    await chrome.open(pw, _profile(tmp_path))
-
-    await chrome.close()
-
-    assert proc.killed
-    assert killed == [(4321, signal.SIGKILL)]
+    assert not (tmp_path / f"{_state(tmp_path).name}.users" / str(ME)).exists()
+    assert world["signals"] == []  # nobody told the launcher to quit
+    assert _state(tmp_path).exists()
 
 
 async def test_close_before_open_does_nothing() -> None:
