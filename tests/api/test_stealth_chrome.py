@@ -1,4 +1,5 @@
-"""StealthChrome: clip_fixer's stealth Chrome in place of a Playwright launch, shared across gflow processes.
+"""StealthChrome: clip_fixer's stealth Chrome in place of a Playwright launch, shared across
+gflow processes.
 
 The launcher process and Playwright are faked; nothing starts a browser.
 """
@@ -55,7 +56,12 @@ class _FakeLauncher:
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Fakes for the launcher (``world["launches"]``), which pids are alive and the signals sent."""
-    record: dict[str, Any] = {"launches": [], "alive": {ME, _FakeLauncher.pid}, "signals": [], "starts": True}
+    record: dict[str, Any] = {
+        "launches": [],
+        "alive": {ME, _FakeLauncher.pid},
+        "signals": [],
+        "starts": True,
+    }
 
     def popen(args: list[str], **kwargs: Any) -> _FakeLauncher:
         launcher = _FakeLauncher(args, starts=record["starts"])
@@ -104,10 +110,15 @@ async def test_the_first_open_starts_a_detached_launcher_and_attaches(
 
     ctx = await StealthChrome().open(pw, profile)
 
-    (launcher, kwargs), = world["launches"]
+    ((launcher, kwargs),) = world["launches"]
     assert launcher.args == [
-        "/opt/clip-fixer/python3", str(LAUNCHER), str(profile),
-        "--state", str(_state(tmp_path)), "--idle", str(IDLE_S),
+        "/opt/clip-fixer/python3",
+        str(LAUNCHER),
+        str(profile),
+        "--state",
+        str(_state(tmp_path)),
+        "--idle",
+        str(IDLE_S),
     ]
     assert kwargs["start_new_session"] is True
     pw.chromium.connect_over_cdp.assert_awaited_once_with("http://127.0.0.1:9222")
@@ -152,7 +163,7 @@ async def test_an_off_screen_chrome_is_replaced_for_a_visible_sign_in(
     await StealthChrome().open(pw, _profile(tmp_path), visible=True)
 
     assert (5555, signal.SIGTERM) in world["signals"]
-    (launcher, _kwargs), = world["launches"]
+    ((launcher, _kwargs),) = world["launches"]
     assert launcher.args[-3:] == ["--idle", "0", "--visible"]
 
 
@@ -170,7 +181,7 @@ async def test_the_proxy_goes_to_the_launcher(tmp_path: Path, world: dict[str, A
 
     await StealthChrome().open(pw, _profile(tmp_path), proxy="http://127.0.0.1:7897")
 
-    (launcher, _kwargs), = world["launches"]
+    ((launcher, _kwargs),) = world["launches"]
     assert launcher.args[-2:] == ["--proxy-server", "http://127.0.0.1:7897"]
 
 

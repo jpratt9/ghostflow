@@ -31,8 +31,6 @@ from gflow_cli.api._engine import (
     run_teardown_step,
 )
 from gflow_cli.api._flow_bootstrap import AccountBootstrap
-from gflow_cli.api.stealth_chrome import CLOSE_TIMEOUT_S as STEALTH_CLOSE_TIMEOUT_S
-from gflow_cli.api.stealth_chrome import StealthChrome
 from gflow_cli.api._flow_characters import CharacterSurface
 from gflow_cli.api._flow_media_edit import MAX_UPSAMPLE_B64_LEN as MAX_UPSAMPLE_B64_LEN
 from gflow_cli.api._flow_session import (
@@ -66,6 +64,8 @@ from gflow_cli.api._flow_workspace import (
     _unwrap_trpc as _unwrap_trpc,  # pyright: ignore[reportPrivateUsage]
 )
 from gflow_cli.api._flow_workspace import validate_image_file as validate_image_file
+from gflow_cli.api.stealth_chrome import CLOSE_TIMEOUT_S as STEALTH_CLOSE_TIMEOUT_S
+from gflow_cli.api.stealth_chrome import StealthChrome
 from gflow_cli.api.transports import (
     STANDALONE_ONLY_TRANSPORTS,
     make_transport,

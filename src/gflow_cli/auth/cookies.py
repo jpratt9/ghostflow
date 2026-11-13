@@ -167,13 +167,13 @@ async def _get_chrome_cookies_playwright(profile_dir: Path) -> ChromeCookieSnaps
         )
 
     # Lazy import avoids strategies -> real_chrome -> verification import cycles.
-    from .strategies import async_playwright
-
     # Own the profile for this momentary cookie-read context (D3). The lease is
     # the OUTER context so it releases only after the driver stops (inner
     # async_playwright exits first). Contention -> ProfileLockedError before the
     # headless Chrome launches.
     from gflow_cli.api.stealth_chrome import StealthChrome
+
+    from .strategies import async_playwright
 
     async with ProfileLease(profile_dir), async_playwright() as pw:
         # clip_fixer's stealth Chrome off-screen, in place of a headless launch.

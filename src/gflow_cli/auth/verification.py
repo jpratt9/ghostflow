@@ -316,9 +316,7 @@ async def verify_flow_session(
                 # clip_fixer's stealth Chrome off-screen, in place of a headless launch.
                 stealth = StealthChrome()
                 try:
-                    ctx = await stealth.open(
-                        pw, profile_dir, proxy=get_settings().browser_proxy
-                    )
+                    ctx = await stealth.open(pw, profile_dir, proxy=get_settings().browser_proxy)
                     try:
                         cookies = await ctx.cookies()
                         google_session = any(c.get("name") == "SAPISID" for c in cookies)

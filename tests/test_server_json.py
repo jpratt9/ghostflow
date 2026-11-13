@@ -88,7 +88,7 @@ def test_package_identifies_the_published_pypi_distribution(
 
 
 @pytest.mark.skip(
-    reason="ghostflow isn't on PyPI or the MCP registry; server.json is upstream gflow-cli's listing"
+    reason="ghostflow isn't on PyPI or the MCP registry: server.json is gflow-cli's listing"
 )
 def test_the_advertised_command_is_actually_installed(
     package: dict[str, Any], pyproject: dict[str, Any]

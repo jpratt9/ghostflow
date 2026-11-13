@@ -30,8 +30,8 @@ class _FakeDriver:
 
 @pytest.fixture
 def clip_fixer(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
-    """Fake ``scraper.config`` and ``scraper.browser_setup``; ``seen`` holds what setup_driver saw and the state
-    file and wait the launcher went into."""
+    """Fake ``scraper.config`` and ``scraper.browser_setup``; ``seen`` holds what setup_driver
+    saw and the state file and wait the launcher went into."""
     driver = _FakeDriver()
     seen: dict[str, Any] = {}
     config = types.ModuleType("scraper.config")
@@ -179,8 +179,12 @@ class _Clock:
 
 def _wait(users_dir: Path, idle: float, clock: _Clock, **kwargs: Any) -> str:
     return stealth_launcher.wait_while_used(
-        users_dir, idle, kwargs.get("browser_pid"), kwargs.get("stopped", []),
-        sleep=kwargs.get("sleep", clock.sleep), now=clock.now,
+        users_dir,
+        idle,
+        kwargs.get("browser_pid"),
+        kwargs.get("stopped", []),
+        sleep=kwargs.get("sleep", clock.sleep),
+        now=clock.now,
     )
 
 
@@ -201,7 +205,9 @@ def test_a_live_user_keeps_it_open_until_it_leaves(tmp_path: Path) -> None:
             user.unlink(missing_ok=True)
 
     assert _wait(tmp_path, 600, clock, sleep=sleep) == "idle"
-    assert clock.t >= 1000 - stealth_launcher.CHECK_EVERY_S + 600  # idle counts from its last sighting
+    assert (
+        clock.t >= 1000 - stealth_launcher.CHECK_EVERY_S + 600
+    )  # idle counts from its last sighting
 
 
 def test_a_dead_users_file_is_cleared_and_does_not_hold_it_open(tmp_path: Path) -> None:

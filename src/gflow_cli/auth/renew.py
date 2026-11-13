@@ -139,7 +139,8 @@ async def _await_labs_refresh(page: Any, source: str) -> bool | None:
 
 
 async def renew_profile(profile_dir: Path, *, source: str = "renew") -> RenewResult:
-    """Refresh ``profile_dir``'s session in the off-screen stealth Chrome and report what was observed.
+    """Refresh ``profile_dir``'s session in the off-screen stealth Chrome and report what was
+    observed.
 
     Raises ``ProfileLockedError`` when another gflow process holds the profile
     and ``ProfileEngineDowngradeError`` when the profile was written by a newer

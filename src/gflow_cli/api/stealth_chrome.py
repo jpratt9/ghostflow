@@ -1,11 +1,12 @@
 """clip_fixer's stealth Chrome in place of a Playwright-launched one, shared across gflow processes.
 
-``stealth_launcher.py`` keeps it open, detached, under the Python that has clip_fixer's requirements, and writes its
-CDP address to a state file beside the profile. Playwright attaches over CDP, so the rest of gflow drives Flow exactly
-as it drove its own Chrome. The first gflow process to need it starts the launcher; later ones attach to the same
-Chrome; it quits once none has used it for IDLE_S (an on-screen one, for signing in, as soon as it's done with).
-Every tab a process opens gets the CDP commands clip_fixer's stealth setup sends its first tab, and is closed when the
-process is done; closing the context only lets go of the browser.
+``stealth_launcher.py`` keeps it open, detached, under the Python that has clip_fixer's
+requirements, and writes its CDP address to a state file beside the profile. Playwright attaches
+over CDP, so the rest of gflow drives Flow exactly as it drove its own Chrome. The first gflow
+process to need it starts the launcher; later ones attach to the same Chrome; it quits once none
+has used it for IDLE_S (an on-screen one, for signing in, as soon as it's done with). Every tab a
+process opens gets the CDP commands clip_fixer's stealth setup sends its first tab, and is closed
+when the process is done; closing the context only lets go of the browser.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import structlog
 from playwright.async_api import BrowserContext, Page
@@ -27,15 +28,16 @@ logger = structlog.get_logger(__name__)
 
 LAUNCHER = Path(__file__).resolve().parent.parent / "stealth_launcher.py"
 IDLE_S = 60  # an off-screen stealth Chrome nobody has used for this long quits
-# A caller making several videos in a row (a content pipeline) names its own pid here, so the browser stays open
-# between its ghostflow commands for as long as it runs, and quits IDLE_S after it's gone.
+# A caller making several videos in a row (a content pipeline) names its own pid here, so the
+# browser stays open between its ghostflow commands for as long as it runs, and quits IDLE_S after
+# it's gone.
 USER_PID_ENV = "GFLOW_CLI_STEALTH_USER_PID"
 START_TIMEOUT_S = 120.0  # clip_fixer's setup: chromedriver, then Chrome, on a cold machine
 QUIT_TIMEOUT_S = 30.0
 CLOSE_TIMEOUT_S = 15.0  # for a caller's bounded teardown step
 
 
-def _alive(pid: int | None) -> bool:
+def _alive(pid: int | None) -> TypeGuard[int]:
     if not pid:
         return False
     try:
@@ -84,9 +86,10 @@ class StealthChrome:
     async def open(
         self, pw: Any, profile_dir: Path, *, visible: bool = False, proxy: str | None = None
     ) -> BrowserContext:
-        """The stealth Chrome's default context on ``profile_dir``, attached over CDP: the one already open when it's
-        the same kind, else a new one. Off-screen unless ``visible`` (a person signing in needs to see it); through
-        ``proxy`` (GFLOW_CLI_BROWSER_PROXY) when one is set."""
+        """The stealth Chrome's default context on ``profile_dir``, attached over CDP: the one
+        already open when it's the same kind, else a new one. Off-screen unless ``visible`` (a
+        person signing in needs to see it); through ``proxy`` (GFLOW_CLI_BROWSER_PROXY) when one
+        is set."""
         state = profile_dir.parent / f"stealth_{profile_dir.name}.json"
         users = Path(f"{state}.users")
         users.mkdir(parents=True, exist_ok=True)
@@ -107,7 +110,9 @@ class StealthChrome:
             try:
                 self._browser = await pw.chromium.connect_over_cdp(f"http://{info['cdp']}")
             except Exception:
-                logger.warning("stealth_chrome.attach_failed", launcher_pid=info.get("launcher_pid"))
+                logger.warning(
+                    "stealth_chrome.attach_failed", launcher_pid=info.get("launcher_pid")
+                )
                 await _stop(info, state)
                 info = None
             else:
@@ -143,7 +148,7 @@ class StealthChrome:
         args += ["--visible"] if visible else []
         args += ["--proxy-server", proxy] if proxy else []
         with log_path.open("ab") as log:
-            proc = subprocess.Popen(  # noqa: ASYNC220 — must not be an asyncio child: those are killed on exit
+            proc = subprocess.Popen(  # noqa: ASYNC220, S603 - asyncio children die on exit
                 args,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -154,7 +159,9 @@ class StealthChrome:
         while time.monotonic() < deadline:
             info = _read(state)
             if info is not None and info.get("launcher_pid") == proc.pid:
-                logger.info("stealth_chrome.started", browser_pid=info.get("browser_pid"), visible=visible)
+                logger.info(
+                    "stealth_chrome.started", browser_pid=info.get("browser_pid"), visible=visible
+                )
                 return info
             if proc.poll() is not None:
                 break
@@ -166,7 +173,7 @@ class StealthChrome:
     async def _cloak(self, context: BrowserContext, page: Page) -> None:
         session = await context.new_cdp_session(page)
         for method, params in self._page_cdp:
-            await session.send(method, params)
+            await session.send(method, params)  # pyright: ignore[reportUnknownMemberType]
         self._sessions.append(session)
 
     async def _close_tabs(self) -> None:
@@ -176,7 +183,8 @@ class StealthChrome:
                 await page.close()
 
     async def close(self) -> None:
-        """Close this process's tabs and let go of the browser; it stays open for the next process."""
+        """Close this process's tabs and let go of the browser; it stays open for the next
+        process."""
         if self._browser is not None:
             await self._close_tabs()
             with contextlib.suppress(Exception):
