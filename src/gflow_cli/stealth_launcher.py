@@ -51,7 +51,25 @@ class _CdpRecorder:
         return {}
 
 
+def _alive_on_windows(pid: int) -> bool:
+    """Whether `pid` is running, asked of Windows itself: there os.kill(pid, 0) isn't a check but
+    TerminateProcess, which ended the very process it asked about (JohnsThinkpad, 2026-11-20)."""
+    import ctypes  # noqa: PLC0415 - Windows only
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ctypes.get_last_error() == 5  # type: ignore[attr-defined]  # ACCESS_DENIED: running
+    try:
+        code = ctypes.c_ulong()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+    finally:
+        kernel32.CloseHandle(handle)  # 259: STILL_ACTIVE
+
+
 def _alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _alive_on_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

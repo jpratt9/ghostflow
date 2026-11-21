@@ -17,6 +17,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -40,6 +41,8 @@ CLOSE_TIMEOUT_S = 15.0  # for a caller's bounded teardown step
 def _alive(pid: int | None) -> TypeGuard[int]:
     if not pid:
         return False
+    if sys.platform == "win32":
+        return _alive_on_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -47,6 +50,22 @@ def _alive(pid: int | None) -> TypeGuard[int]:
     except PermissionError:
         return True
     return True
+
+
+def _alive_on_windows(pid: int) -> bool:
+    """Whether `pid` is running, asked of Windows itself: there os.kill(pid, 0) isn't a check but
+    TerminateProcess, which ended the very process it asked about (JohnsThinkpad, 2026-11-20)."""
+    import ctypes  # noqa: PLC0415 - Windows only
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ctypes.get_last_error() == 5  # type: ignore[attr-defined]  # ACCESS_DENIED: running
+    try:
+        code = ctypes.c_ulong()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+    finally:
+        kernel32.CloseHandle(handle)  # 259: STILL_ACTIVE
 
 
 def _read(state: Path) -> dict[str, Any] | None:
@@ -68,7 +87,7 @@ async def _stop(info: dict[str, Any], state: Path) -> None:
         for pid in (launcher, info.get("browser_pid")):
             if _alive(pid):
                 with contextlib.suppress(ProcessLookupError):
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # Windows has no SIGKILL
     if _read(state) == info:
         state.unlink(missing_ok=True)
 
@@ -154,6 +173,10 @@ class StealthChrome:
                 stdout=subprocess.DEVNULL,
                 stderr=log,
                 start_new_session=True,
+                # Windows: out of this process's console, which ends with it and takes the
+                # processes still attached to it along
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
             )
         deadline = time.monotonic() + START_TIMEOUT_S
         while time.monotonic() < deadline:

@@ -226,3 +226,24 @@ def test_it_stops_when_chrome_exits(tmp_path: Path) -> None:
 
 def test_it_stops_on_sigterm(tmp_path: Path) -> None:
     assert _wait(tmp_path, 600, _Clock(), stopped=[True]) == "stopped"
+
+
+@pytest.mark.parametrize("module_name", ["gflow_cli.stealth_launcher", "gflow_cli.api.stealth_chrome"])
+def test_on_windows_alive_asks_windows_never_os_kill(
+    monkeypatch: pytest.MonkeyPatch, module_name: str
+) -> None:
+    """os.kill(pid, 0) on Windows is TerminateProcess, which ended the process it asked about
+    (JohnsThinkpad, 2026-11-20): there liveness is asked of Windows itself."""
+    import importlib
+
+    module = importlib.import_module(module_name)
+    asked: list[int] = []
+
+    def never(*_args: Any) -> None:
+        raise AssertionError("os.kill on Windows")
+
+    monkeypatch.setattr(module.os, "kill", never)
+    monkeypatch.setattr(module, "_alive_on_windows", lambda pid: asked.append(pid) or True)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    assert module._alive(4321) is True
+    assert asked == [4321]
