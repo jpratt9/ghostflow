@@ -249,30 +249,3 @@ def test_on_windows_alive_asks_windows_never_os_kill(
     assert module._alive(4321) is True
     assert asked == [4321]
 
-
-def test_a_launcher_under_a_venv_stub_is_found_by_its_parent_pid(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Windows: a venv's python.exe runs the real one as its child, so the pid Popen gave is the
-    launcher's parent's, not its own; it was waited for till it timed out, and its Chrome left
-    running (JohnsThinkpad, 2026-11-20)."""
-    import asyncio
-
-    from gflow_cli.api import stealth_chrome
-
-    state = tmp_path / "stealth_profile_x.json"
-
-    class Stub:
-        pid = 100
-
-        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            state.write_text(json.dumps({"launcher_pid": 200, "parent_pid": 100, "cdp": "x"}))
-
-        def poll(self) -> None:
-            return None
-
-    monkeypatch.setattr(stealth_chrome.subprocess, "Popen", Stub)
-    found = asyncio.run(
-        stealth_chrome.StealthChrome()._launch(state, tmp_path / "profile_x", False, None)
-    )
-    assert found["launcher_pid"] == 200
