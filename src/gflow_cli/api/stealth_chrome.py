@@ -181,7 +181,8 @@ class StealthChrome:
         deadline = time.monotonic() + START_TIMEOUT_S
         while time.monotonic() < deadline:
             info = _read(state)
-            if info is not None and info.get("launcher_pid") == proc.pid:
+            # the launcher, or on Windows the venv stub it runs under (its parent_pid)
+            if info is not None and proc.pid in (info.get("launcher_pid"), info.get("parent_pid")):
                 logger.info(
                     "stealth_chrome.started", browser_pid=info.get("browser_pid"), visible=visible
                 )

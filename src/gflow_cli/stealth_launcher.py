@@ -184,6 +184,9 @@ def main() -> None:
             browser_pid = getattr(driver, "browser_pid", None)
             info = {
                 "launcher_pid": os.getpid(),
+                # Windows: a venv's python.exe is a stub that runs the real one as its child, so
+                # the pid whoever started this has is this process's parent's
+                "parent_pid": os.getppid(),
                 "browser_pid": browser_pid,
                 "cdp": driver.capabilities["goog:chromeOptions"]["debuggerAddress"],
                 "page_cdp": [call for call in recorder.calls if not call[0].startswith("Browser.")],
