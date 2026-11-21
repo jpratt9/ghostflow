@@ -79,6 +79,19 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _close(driver: Any, browser_pid: int | None) -> None:
+    """Chrome closed as a person closes it, then waited for, so it writes Google's newest cookies to
+    the profile first: driver.quit() ends it with os.kill, which is TerminateProcess on Windows, and
+    the stale cookies the next start sent signed the profile out (JohnsThinkpad, 2026-11-20)."""
+    try:
+        driver.execute_cdp_cmd("Browser.close", {})
+    except Exception:  # noqa: BLE001, S110 - the link drops as Chrome goes; quit() kills it if it didn't
+        pass
+    deadline = time.monotonic() + 15
+    while browser_pid and _alive(browser_pid) and time.monotonic() < deadline:
+        time.sleep(0.5)
+
+
 def _users(users_dir: Path) -> list[int]:
     """The pids in `users_dir` still running; the files of any that aren't are removed."""
     alive: list[int] = []
@@ -199,6 +212,7 @@ def main() -> None:
             print(f"Stealth Chrome closing: {reason}")  # noqa: T201 - stdout is its log
         finally:
             _forget_state(state)
+            _close(driver, browser_pid)
             driver.quit()
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

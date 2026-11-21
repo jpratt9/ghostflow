@@ -75,8 +75,23 @@ def _read(state: Path) -> dict[str, Any] | None:
         return None
 
 
-async def _stop(info: dict[str, Any], state: Path) -> None:
+async def _close(pw: Any, cdp: str, browser_pid: int) -> None:
+    """The stealth Chrome at DevTools address `cdp` closed as a person closes it, then waited for, so
+    it writes Google's newest cookies to the profile first: a SIGTERM is TerminateProcess on Windows,
+    and the stale cookies the next start sent signed the profile out (JohnsThinkpad, 2026-11-20)."""
+    with contextlib.suppress(Exception):  # it won't: the SIGTERM and kill after this end it as before
+        browser = await asyncio.wait_for(pw.chromium.connect_over_cdp(f"http://{cdp}"), 10)
+        session = await browser.new_browser_cdp_session()
+        await session.send("Browser.close")
+    deadline = time.monotonic() + QUIT_TIMEOUT_S
+    while _alive(browser_pid) and time.monotonic() < deadline:
+        await asyncio.sleep(0.5)
+
+
+async def _stop(info: dict[str, Any], state: Path, pw: Any = None) -> None:
     """Have the launcher `info` names quit its Chrome, killing both if it won't, and forget it."""
+    if pw is not None and info.get("cdp") and _alive(info.get("browser_pid")):
+        await _close(pw, info["cdp"], info["browser_pid"])
     launcher = info.get("launcher_pid")
     if _alive(launcher):
         with contextlib.suppress(ProcessLookupError):
@@ -123,7 +138,7 @@ class StealthChrome:
             and info.get("visible") == visible
             and info.get("proxy") == proxy
         ):
-            await _stop(info, state)  # gone, or the other kind (on screen or off, another proxy)
+            await _stop(info, state, pw)  # gone, or the other kind (on screen or off, another proxy)
             info = None
         if info is not None:
             try:
@@ -132,7 +147,7 @@ class StealthChrome:
                 logger.warning(
                     "stealth_chrome.attach_failed", launcher_pid=info.get("launcher_pid")
                 )
-                await _stop(info, state)
+                await _stop(info, state, pw)
                 info = None
             else:
                 logger.info("stealth_chrome.attached", browser_pid=info.get("browser_pid"))
