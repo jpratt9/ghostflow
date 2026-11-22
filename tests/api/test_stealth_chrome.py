@@ -246,3 +246,25 @@ def test_a_launcher_under_a_venv_stub_is_found_by_its_parent_pid(
         StealthChrome()._launch(state, tmp_path / "profile_x", False, None)
     )
     assert found["launcher_pid"] == 200
+
+
+async def test_a_replaced_chrome_is_closed_through_devtools_before_any_signal(
+    tmp_path: Path, world: dict[str, Any]
+) -> None:
+    """A SIGTERM is TerminateProcess on Windows: Chrome is told to close first, so it writes
+    Google's newest cookies, and its launcher quits once it has."""
+    world["alive"].update({5555, 4321})
+    _state(tmp_path).write_text(json.dumps(_state_info(5555)))
+    pw, browser, *_ = _fake_playwright()
+    sent: list[str] = []
+
+    async def send(method: str) -> None:
+        sent.append(method)
+        world["alive"] -= {4321, 5555}
+
+    browser.new_browser_cdp_session = AsyncMock(return_value=MagicMock(send=send))
+
+    await StealthChrome().open(pw, _profile(tmp_path), visible=True)
+
+    assert sent == ["Browser.close"]
+    assert (5555, signal.SIGTERM) not in world["signals"]

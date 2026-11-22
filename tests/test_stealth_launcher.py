@@ -249,3 +249,25 @@ def test_on_windows_alive_asks_windows_never_os_kill(
     assert module._alive(4321) is True
     assert asked == [4321]
 
+
+
+def test_close_asks_chrome_to_close_then_waits_for_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chrome closed as a person closes it, so it writes its cookies: driver.quit() is os.kill,
+    TerminateProcess on Windows."""
+    from unittest.mock import MagicMock
+
+    alive = iter([True, False])
+    monkeypatch.setattr(stealth_launcher, "_alive", lambda pid: next(alive))
+    monkeypatch.setattr(stealth_launcher.time, "sleep", lambda seconds: None)
+    driver = MagicMock()
+    stealth_launcher._close(driver, 4321)
+    driver.execute_cdp_cmd.assert_called_once_with("Browser.close", {})
+
+
+def test_close_lets_the_link_drop_as_chrome_goes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(stealth_launcher, "_alive", lambda pid: False)
+    driver = MagicMock()
+    driver.execute_cdp_cmd.side_effect = RuntimeError("disconnected")
+    stealth_launcher._close(driver, 4321)  # quit() kills it if it didn't close
