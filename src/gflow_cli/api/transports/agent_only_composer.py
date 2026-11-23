@@ -43,6 +43,7 @@ import structlog
 from playwright.async_api import Error as PlaywrightError
 
 from gflow_cli.api.dto import GeneratedImage
+from gflow_cli.api.human_mouse import human_click
 from gflow_cli.api.image import Aspect as ImageAspect
 from gflow_cli.api.transports.migrated_composer import (
     AGENT_ONLY_ANCHOR,
@@ -300,7 +301,7 @@ def _tile_key(tile: dict[str, str]) -> str:
 async def _click(target: Locator, what: str, timeout_ms: int = 4000) -> None:
     """A pre-submit click: a Playwright failure here is drift (exit 23), nothing was sent."""
     try:
-        await target.click(timeout=timeout_ms)
+        await human_click(target, timeout_ms=timeout_ms)
     except PlaywrightError as exc:
         raise UiSelectorDriftError(detail=f"agent-only composer: could not click {what}") from exc
 

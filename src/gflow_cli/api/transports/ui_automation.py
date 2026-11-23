@@ -28,6 +28,7 @@ import structlog
 from gflow_cli.api._retry import parse_retry_after
 from gflow_cli.api.character import CharacterImageRequest
 from gflow_cli.api.dto import BatchSubmissionResult, GeneratedImage
+from gflow_cli.api.human_mouse import human_click
 from gflow_cli.api.image import Aspect, GenerateImageRequest, ImageRef, Model
 from gflow_cli.api.transports._common import (
     await_url_settled,
@@ -1785,7 +1786,7 @@ class UiAutomationTransport(VideoGenerationMixin):
             try:
                 btn = page.locator(sel).first
                 await btn.wait_for(state="visible", timeout=2_000)
-                await btn.click()
+                await human_click(btn)
                 log.info("ui_automation.prompt_submitted", via=sel)
                 return
             except Exception:
@@ -1973,7 +1974,7 @@ class UiAutomationTransport(VideoGenerationMixin):
 
         input_box = await self._locate_prompt_box(page, out_dir)
 
-        await input_box.click()
+        await human_click(input_box)
         await page.keyboard.press("Control+A")
         await page.keyboard.press("Delete")
         # insert_text fires a single beforeinput event that Slate.js handles
@@ -2036,7 +2037,7 @@ class UiAutomationTransport(VideoGenerationMixin):
         # Slate.js needs real keyboard events, but every event must stay bound to
         # this locator: page-global keyboard calls can follow a late focus bounce
         # into the autosaved portrait composer.
-        await input_box.click()
+        await human_click(input_box)
         await self._verify_body_prompt_focus(page, input_box, out_dir)
         await input_box.press("Control+A")
         await input_box.press("Delete")

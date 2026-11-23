@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, urlsplit
 import structlog
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from gflow_cli.api.human_mouse import human_click
 from gflow_cli.api.transports._common import raise_if_known_landing
 from gflow_cli.api.transports.batchexecute import find_record, parse_frames
 from gflow_cli.api.transports.migrated_composer import (
@@ -530,7 +531,7 @@ async def run_extend(  # noqa: PLR0913
     composer = MigratedComposer()
     await (await _anchor(page, ADD_CLIP_BUTTON, named="timeline add-clip button")).click()
     await (await _anchor(page, EXTEND_MENU_ITEM, named="Extend menu item")).click()
-    await (await _anchor(page, EXTEND_PROMPT, named="extend prompt box")).click()
+    await human_click(await _anchor(page, EXTEND_PROMPT, named="extend prompt box"))
     await page.keyboard.insert_text(prompt)
 
     facts: dict[str, str | None] = {}

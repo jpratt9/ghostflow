@@ -28,6 +28,7 @@ import structlog
 
 from gflow_cli.api import routes
 from gflow_cli.api._retry import parse_retry_after
+from gflow_cli.api.human_mouse import human_click
 from gflow_cli.api.transports._common import (
     close_menu,
     count_visible,
@@ -1976,6 +1977,7 @@ class VideoGenerationMixin:
         and verify the picker dialog closed. Used by both the I2V frame and R2V
         reference remote-attach paths (the picker is identical once open)."""
         search_input = page.locator(PICKER_SEARCH_INPUT)
+        await human_click(search_input)
         # Human-like typing jitter to dodge WAF bot heuristics — not a security
         # context, so a plain PRNG is fine.
         await search_input.press_sequentially(name, delay=random.randint(10, 50))  # NOSONAR  # noqa: S311 - human-pacing jitter, not cryptography
